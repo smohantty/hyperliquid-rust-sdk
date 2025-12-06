@@ -312,7 +312,9 @@ impl PerpGridManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::grid::config::AssetPrecision;
     use crate::grid::executor::mock::MockExchange;
+    use crate::grid::types::MarginInfo;
 
     async fn create_test_perp_manager() -> (PerpGridManager, MockExchange) {
         // $4500 total investment, 10 grids, BTC price range 40000-50000

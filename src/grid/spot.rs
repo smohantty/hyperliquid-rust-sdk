@@ -232,6 +232,7 @@ impl SpotGridManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::grid::config::AssetPrecision;
     use crate::grid::executor::mock::MockExchange;
 
     async fn create_test_spot_manager() -> (SpotGridManager, MockExchange) {

@@ -76,6 +76,9 @@ pub struct HyperliquidExchange {
     user_address: Address,
     max_retries: u32,
     retry_base_delay_ms: u64,
+    market_type: MarketType,
+    /// Cached spot index (e.g., "@107" for HYPE) - resolved during first use
+    spot_index_cache: Arc<tokio::sync::Mutex<Option<String>>>,
 }
 
 impl HyperliquidExchange {
@@ -91,6 +94,60 @@ impl HyperliquidExchange {
             user_address,
             max_retries: config.max_order_retries,
             retry_base_delay_ms: config.retry_base_delay_ms,
+            market_type: config.market_type,
+            spot_index_cache: Arc::new(tokio::sync::Mutex::new(None)),
+        }
+    }
+
+    /// Resolve spot asset name (e.g., "HYPE/USDC") to spot index format (e.g., "@107")
+    async fn resolve_spot_asset(&self, asset: &str) -> GridResult<String> {
+        // Check cache first
+        {
+            let cache = self.spot_index_cache.lock().await;
+            if let Some(ref cached) = *cache {
+                return Ok(cached.clone());
+            }
+        }
+
+        let info = self.info_client.lock().await;
+        let spot_meta = info.spot_meta().await.map_err(|e| GridError::Exchange(e.to_string()))?;
+
+        // Build token index -> name mapping
+        let index_to_name: std::collections::HashMap<usize, &str> = spot_meta
+            .tokens
+            .iter()
+            .map(|t| (t.index, t.name.as_str()))
+            .collect();
+
+        // Extract base token name from asset (e.g., "HYPE" from "HYPE/USDC")
+        let base_name = asset.split('/').next().unwrap_or(asset);
+
+        // Find the spot asset and its index
+        for spot_asset in &spot_meta.universe {
+            if let Some(t1) = index_to_name.get(&spot_asset.tokens[0]) {
+                if *t1 == base_name || asset == spot_asset.name {
+                    let spot_index = format!("@{}", spot_asset.index);
+
+                    // Cache the result
+                    let mut cache = self.spot_index_cache.lock().await;
+                    *cache = Some(spot_index.clone());
+
+                    return Ok(spot_index);
+                }
+            }
+        }
+
+        Err(GridError::AssetNotFound(format!(
+            "Could not find spot index for '{}'. Make sure the asset name is correct.",
+            asset
+        )))
+    }
+
+    /// Get the correct asset identifier for API calls
+    async fn get_asset_key(&self, asset: &str) -> GridResult<String> {
+        match self.market_type {
+            MarketType::Perp => Ok(asset.to_string()),
+            MarketType::Spot => self.resolve_spot_asset(asset).await,
         }
     }
 
@@ -251,6 +308,9 @@ impl GridExchange for HyperliquidExchange {
     }
 
     async fn get_mid_price(&self, asset: &str) -> GridResult<f64> {
+        // Resolve asset name to the correct format for API
+        let asset_key = self.get_asset_key(asset).await?;
+
         let info = self.info_client.lock().await;
         let all_mids = info
             .all_mids()
@@ -258,9 +318,11 @@ impl GridExchange for HyperliquidExchange {
             .map_err(|e| GridError::Exchange(e.to_string()))?;
 
         all_mids
-            .get(asset)
+            .get(&asset_key)
             .and_then(|s| s.parse::<f64>().ok())
-            .ok_or_else(|| GridError::AssetNotFound(asset.to_string()))
+            .ok_or_else(|| GridError::AssetNotFound(format!(
+                "{} (key: {})", asset, asset_key
+            )))
     }
 
     async fn get_position(&self, asset: &str) -> GridResult<Option<Position>> {
