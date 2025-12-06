@@ -645,7 +645,7 @@ async fn dashboard_handler(State(state): State<AppState>) -> Html<String> {
             min-height: 100vh;
         }}
         .container {{ max-width: 1400px; margin: 0 auto; padding: 24px; }}
-        
+
         header {{
             display: flex;
             justify-content: space-between;
@@ -762,7 +762,7 @@ async fn dashboard_handler(State(state): State<AppState>) -> Html<String> {
             border-bottom: 1px solid var(--border);
         }}
         tr:hover {{ background: rgba(255,255,255,0.02); }}
-        
+
         .level-num {{
             font-family: 'JetBrains Mono', monospace;
             color: var(--text-muted);
