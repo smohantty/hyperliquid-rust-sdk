@@ -6,16 +6,16 @@ use std::time::Duration;
 use alloy::primitives::Address;
 use async_trait::async_trait;
 use log::warn;
-use tokio::sync::mpsc::{self, UnboundedReceiver};
+use tokio::sync::Mutex;
 
 use crate::{
-    ClientLimit, ClientOrder, ClientOrderRequest, ExchangeClient,
-    ExchangeDataStatus, ExchangeResponseStatus, InfoClient, Message, Subscription,
+    ClientLimit, ClientOrder, ClientOrderRequest, ExchangeClient, ExchangeDataStatus,
+    ExchangeResponseStatus, InfoClient,
 };
 
 use super::config::{AssetPrecision, GridConfig, MarketType};
 use super::errors::{GridError, GridResult};
-use super::types::{GridFill, GridOrderRequest, MarginInfo, OrderResult, OrderResultStatus, OrderSide, Position};
+use super::types::{GridOrderRequest, MarginInfo, OrderResult, OrderResultStatus, OrderSide, Position};
 
 /// Exchange operations trait - can be mocked for testing
 #[async_trait]
@@ -45,26 +45,6 @@ pub trait GridExchange: Send + Sync {
     async fn get_asset_precision(&self, asset: &str, market_type: MarketType) -> GridResult<AssetPrecision>;
 }
 
-/// Price feed trait - can be mocked for testing
-#[async_trait]
-pub trait PriceFeed: Send + Sync {
-    /// Subscribe to price updates
-    async fn subscribe(&mut self, asset: &str) -> GridResult<UnboundedReceiver<f64>>;
-
-    /// Unsubscribe from price updates
-    async fn unsubscribe(&mut self) -> GridResult<()>;
-}
-
-/// Fill feed trait - can be mocked for testing
-#[async_trait]
-pub trait FillFeed: Send + Sync {
-    /// Subscribe to fill updates
-    async fn subscribe(&mut self) -> GridResult<UnboundedReceiver<GridFill>>;
-
-    /// Unsubscribe from fill updates
-    async fn unsubscribe(&mut self) -> GridResult<()>;
-}
-
 // ============================================================================
 // Real Hyperliquid Implementation
 // ============================================================================
@@ -72,13 +52,13 @@ pub trait FillFeed: Send + Sync {
 /// Real Hyperliquid exchange implementation
 pub struct HyperliquidExchange {
     exchange_client: Arc<ExchangeClient>,
-    info_client: Arc<tokio::sync::Mutex<InfoClient>>,
+    info_client: Arc<Mutex<InfoClient>>,
     user_address: Address,
     max_retries: u32,
     retry_base_delay_ms: u64,
     market_type: MarketType,
-    /// Cached spot index (e.g., "@107" for HYPE) - resolved during first use
-    spot_index_cache: Arc<tokio::sync::Mutex<Option<String>>>,
+    /// Cached spot index (e.g., "@107" for HYPE)
+    spot_index_cache: Arc<Mutex<Option<String>>>,
 }
 
 impl HyperliquidExchange {
@@ -90,16 +70,16 @@ impl HyperliquidExchange {
         let user_address = exchange_client.wallet.address();
         Self {
             exchange_client: Arc::new(exchange_client),
-            info_client: Arc::new(tokio::sync::Mutex::new(info_client)),
+            info_client: Arc::new(Mutex::new(info_client)),
             user_address,
             max_retries: config.max_order_retries,
             retry_base_delay_ms: config.retry_base_delay_ms,
             market_type: config.market_type,
-            spot_index_cache: Arc::new(tokio::sync::Mutex::new(None)),
+            spot_index_cache: Arc::new(Mutex::new(None)),
         }
     }
 
-    /// Resolve spot asset name (e.g., "HYPE/USDC") to spot index format (e.g., "@107")
+    /// Resolve spot asset name to index format (e.g., "HYPE/USDC" -> "@107")
     async fn resolve_spot_asset(&self, asset: &str) -> GridResult<String> {
         // Check cache first
         {
@@ -112,34 +92,30 @@ impl HyperliquidExchange {
         let info = self.info_client.lock().await;
         let spot_meta = info.spot_meta().await.map_err(|e| GridError::Exchange(e.to_string()))?;
 
-        // Build token index -> name mapping
         let index_to_name: std::collections::HashMap<usize, &str> = spot_meta
             .tokens
             .iter()
             .map(|t| (t.index, t.name.as_str()))
             .collect();
 
-        // Extract base token name from asset (e.g., "HYPE" from "HYPE/USDC")
         let base_name = asset.split('/').next().unwrap_or(asset);
 
-        // Find the spot asset and its index
         for spot_asset in &spot_meta.universe {
             if let Some(t1) = index_to_name.get(&spot_asset.tokens[0]) {
                 if *t1 == base_name || asset == spot_asset.name {
                     let spot_index = format!("@{}", spot_asset.index);
-
-                    // Cache the result
+                    
+                    drop(info);
                     let mut cache = self.spot_index_cache.lock().await;
                     *cache = Some(spot_index.clone());
-
+                    
                     return Ok(spot_index);
                 }
             }
         }
 
         Err(GridError::AssetNotFound(format!(
-            "Could not find spot index for '{}'. Make sure the asset name is correct.",
-            asset
+            "Could not find spot index for '{}'", asset
         )))
     }
 
@@ -189,23 +165,23 @@ impl HyperliquidExchange {
 #[async_trait]
 impl GridExchange for HyperliquidExchange {
     async fn place_order(&self, asset: &str, order: &GridOrderRequest) -> GridResult<OrderResult> {
+        let asset_key = self.get_asset_key(asset).await?;
         let exchange = self.exchange_client.clone();
-        let asset = asset.to_string();
         let order = order.clone();
 
         self.with_retry(|| {
             let exchange = exchange.clone();
-            let asset = asset.clone();
+            let asset_key = asset_key.clone();
             let order = order.clone();
 
             async move {
                 let client_order = ClientOrderRequest {
-                    asset: asset.clone(),
+                    asset: asset_key.clone(),
                     is_buy: order.side == OrderSide::Buy,
                     reduce_only: order.reduce_only,
                     limit_px: order.price,
                     sz: order.size,
-                    cloid: None, // No CLOID - we track by OID only
+                    cloid: None,
                     order_type: ClientOrder::Limit(ClientLimit {
                         tif: "Gtc".to_string(),
                     }),
@@ -256,8 +232,10 @@ impl GridExchange for HyperliquidExchange {
     }
 
     async fn cancel_order(&self, asset: &str, oid: u64) -> GridResult<bool> {
+        let asset_key = self.get_asset_key(asset).await?;
+        
         let cancel_req = crate::ClientCancelRequest {
-            asset: asset.to_string(),
+            asset: asset_key,
             oid,
         };
 
@@ -271,13 +249,10 @@ impl GridExchange for HyperliquidExchange {
             ExchangeResponseStatus::Ok(resp) => {
                 if let Some(data) = resp.data {
                     if let Some(status) = data.statuses.first() {
-                        Ok(matches!(status, ExchangeDataStatus::Success))
-                    } else {
-                        Ok(false)
+                        return Ok(matches!(status, ExchangeDataStatus::Success));
                     }
-                } else {
-                    Ok(false)
                 }
+                Ok(false)
             }
             ExchangeResponseStatus::Err(e) => Err(GridError::Exchange(e)),
         }
@@ -290,9 +265,10 @@ impl GridExchange for HyperliquidExchange {
             .await
             .map_err(|e| GridError::Exchange(e.to_string()))?;
 
+        let asset_key = self.get_asset_key(asset).await?;
         let asset_orders: Vec<_> = open_orders
             .into_iter()
-            .filter(|o| o.coin == asset)
+            .filter(|o| o.coin == asset_key)
             .collect();
 
         let count = asset_orders.len() as u32;
@@ -308,9 +284,8 @@ impl GridExchange for HyperliquidExchange {
     }
 
     async fn get_mid_price(&self, asset: &str) -> GridResult<f64> {
-        // Resolve asset name to the correct format for API
         let asset_key = self.get_asset_key(asset).await?;
-
+        
         let info = self.info_client.lock().await;
         let all_mids = info
             .all_mids()
@@ -320,9 +295,7 @@ impl GridExchange for HyperliquidExchange {
         all_mids
             .get(&asset_key)
             .and_then(|s| s.parse::<f64>().ok())
-            .ok_or_else(|| GridError::AssetNotFound(format!(
-                "{} (key: {})", asset, asset_key
-            )))
+            .ok_or_else(|| GridError::AssetNotFound(format!("{} (key: {})", asset, asset_key)))
     }
 
     async fn get_position(&self, asset: &str) -> GridResult<Option<Position>> {
@@ -387,217 +360,42 @@ impl GridExchange for HyperliquidExchange {
             }
             MarketType::Spot => {
                 let spot_meta = info.spot_meta().await.map_err(|e| GridError::Exchange(e.to_string()))?;
+                let base_name = asset.split('/').next().unwrap_or(asset);
 
-                // For spot, we need to find the token's szDecimals
-                let spot_asset = spot_meta
-                    .universe
+                let index_to_name: std::collections::HashMap<usize, &str> = spot_meta
+                    .tokens
                     .iter()
-                    .find(|a| a.name == asset || format!("{}", a.name) == asset);
+                    .map(|t| (t.index, t.name.as_str()))
+                    .collect();
 
-                if let Some(spot_asset) = spot_asset {
-                    let base_token_idx = spot_asset.tokens[0];
-                    let base_token = spot_meta
-                        .tokens
-                        .iter()
-                        .find(|t| t.index == base_token_idx)
-                        .ok_or_else(|| GridError::AssetNotFound(format!("Token index {} not found", base_token_idx)))?;
+                for spot_asset in &spot_meta.universe {
+                    if let Some(t1) = index_to_name.get(&spot_asset.tokens[0]) {
+                        if *t1 == base_name || asset == spot_asset.name {
+                            let base_token = spot_meta
+                                .tokens
+                                .iter()
+                                .find(|t| t.index == spot_asset.tokens[0])
+                                .ok_or_else(|| GridError::AssetNotFound(asset.to_string()))?;
 
-                    Ok(AssetPrecision::for_spot(base_token.sz_decimals as u32))
-                } else {
-                    // Try to find by matching token names (e.g., "PURR/USDC")
-                    let index_to_name: std::collections::HashMap<usize, &str> = spot_meta
-                        .tokens
-                        .iter()
-                        .map(|t| (t.index, t.name.as_str()))
-                        .collect();
-
-                    for spot_asset in &spot_meta.universe {
-                        if let (Some(t1), Some(t2)) = (
-                            index_to_name.get(&spot_asset.tokens[0]),
-                            index_to_name.get(&spot_asset.tokens[1]),
-                        ) {
-                            let pair_name = format!("{}/{}", t1, t2);
-                            if pair_name == asset {
-                                let base_token = spot_meta
-                                    .tokens
-                                    .iter()
-                                    .find(|t| t.index == spot_asset.tokens[0])
-                                    .ok_or_else(|| GridError::AssetNotFound(asset.to_string()))?;
-
-                                return Ok(AssetPrecision::for_spot(base_token.sz_decimals as u32));
-                            }
-                        }
-                    }
-
-                    Err(GridError::AssetNotFound(asset.to_string()))
-                }
-            }
-        }
-    }
-}
-
-/// Real Hyperliquid price feed
-pub struct HyperliquidPriceFeed {
-    info_client: Arc<tokio::sync::Mutex<InfoClient>>,
-    subscription_id: Option<u32>,
-    asset: Option<String>,
-}
-
-impl HyperliquidPriceFeed {
-    pub fn new(info_client: Arc<tokio::sync::Mutex<InfoClient>>) -> Self {
-        Self {
-            info_client,
-            subscription_id: None,
-            asset: None,
-        }
-    }
-}
-
-#[async_trait]
-impl PriceFeed for HyperliquidPriceFeed {
-    async fn subscribe(&mut self, asset: &str) -> GridResult<UnboundedReceiver<f64>> {
-        let (tx, rx) = mpsc::unbounded_channel();
-        let (ws_tx, mut ws_rx) = mpsc::unbounded_channel();
-
-        let mut info = self.info_client.lock().await;
-        let subscription_id = info
-            .subscribe(Subscription::AllMids, ws_tx)
-            .await
-            .map_err(|e| GridError::WebSocket(e.to_string()))?;
-
-        self.subscription_id = Some(subscription_id);
-        self.asset = Some(asset.to_string());
-
-        let asset = asset.to_string();
-
-        // Spawn task to filter and forward prices
-        tokio::spawn(async move {
-            while let Some(msg) = ws_rx.recv().await {
-                if let Message::AllMids(all_mids) = msg {
-                    if let Some(price_str) = all_mids.data.mids.get(&asset) {
-                        if let Ok(price) = price_str.parse::<f64>() {
-                            if tx.send(price).is_err() {
-                                break;
-                            }
+                            return Ok(AssetPrecision::for_spot(base_token.sz_decimals as u32));
                         }
                     }
                 }
+
+                Err(GridError::AssetNotFound(asset.to_string()))
             }
-        });
-
-        Ok(rx)
-    }
-
-    async fn unsubscribe(&mut self) -> GridResult<()> {
-        if let Some(id) = self.subscription_id.take() {
-            let mut info = self.info_client.lock().await;
-            info.unsubscribe(id)
-                .await
-                .map_err(|e| GridError::WebSocket(e.to_string()))?;
         }
-        Ok(())
-    }
-}
-
-/// Real Hyperliquid fill feed
-pub struct HyperliquidFillFeed {
-    info_client: Arc<tokio::sync::Mutex<InfoClient>>,
-    user_address: Address,
-    subscription_id: Option<u32>,
-    asset: String,
-}
-
-impl HyperliquidFillFeed {
-    pub fn new(
-        info_client: Arc<tokio::sync::Mutex<InfoClient>>,
-        user_address: Address,
-        asset: String,
-    ) -> Self {
-        Self {
-            info_client,
-            user_address,
-            subscription_id: None,
-            asset,
-        }
-    }
-}
-
-#[async_trait]
-impl FillFeed for HyperliquidFillFeed {
-    async fn subscribe(&mut self) -> GridResult<UnboundedReceiver<GridFill>> {
-        let (tx, rx) = mpsc::unbounded_channel();
-        let (ws_tx, mut ws_rx) = mpsc::unbounded_channel();
-
-        let mut info = self.info_client.lock().await;
-        let subscription_id = info
-            .subscribe(
-                Subscription::UserFills {
-                    user: self.user_address,
-                },
-                ws_tx,
-            )
-            .await
-            .map_err(|e| GridError::WebSocket(e.to_string()))?;
-
-        self.subscription_id = Some(subscription_id);
-
-        let asset = self.asset.clone();
-
-        // Spawn task to convert and forward fills
-        tokio::spawn(async move {
-            while let Some(msg) = ws_rx.recv().await {
-                if let Message::UserFills(user_fills) = msg {
-                    for fill in user_fills.data.fills {
-                        // Filter by asset
-                        if fill.coin != asset {
-                            continue;
-                        }
-
-                        let grid_fill = GridFill {
-                            oid: fill.oid,
-                            price: fill.px.parse().unwrap_or(0.0),
-                            size: fill.sz.parse().unwrap_or(0.0),
-                            side: OrderSide::from(fill.side.as_str()),
-                            fee: fill.fee.parse().unwrap_or(0.0),
-                            fee_token: fill.fee_token,
-                            coin: fill.coin,
-                            timestamp: fill.time,
-                            closed_pnl: fill.closed_pnl.parse().unwrap_or(0.0),
-                        };
-
-                        if tx.send(grid_fill).is_err() {
-                            break;
-                        }
-                    }
-                }
-            }
-        });
-
-        Ok(rx)
-    }
-
-    async fn unsubscribe(&mut self) -> GridResult<()> {
-        if let Some(id) = self.subscription_id.take() {
-            let mut info = self.info_client.lock().await;
-            info.unsubscribe(id)
-                .await
-                .map_err(|e| GridError::WebSocket(e.to_string()))?;
-        }
-        Ok(())
     }
 }
 
 // ============================================================================
-// Mock Implementations for Testing
+// Mock Implementation for Testing
 // ============================================================================
 
-#[cfg(test)]
+/// Mock exchange for testing grid bots without a real exchange connection.
 pub mod mock {
     use super::*;
     use std::sync::atomic::{AtomicU64, Ordering};
-    use tokio::sync::mpsc::UnboundedSender;
-    use tokio::sync::Mutex;
-    use crate::grid::config::MarketType;
 
     /// Mock exchange for testing
     pub struct MockExchange {
@@ -683,68 +481,6 @@ pub mod mock {
 
         async fn get_asset_precision(&self, _asset: &str, _market_type: MarketType) -> GridResult<AssetPrecision> {
             Ok(*self.asset_precision.lock().await)
-        }
-    }
-
-    /// Mock price feed for testing
-    pub struct MockPriceFeed {
-        tx: Option<UnboundedSender<f64>>,
-    }
-
-    impl MockPriceFeed {
-        pub fn new() -> Self {
-            Self { tx: None }
-        }
-
-        pub fn send_price(&self, price: f64) {
-            if let Some(tx) = &self.tx {
-                let _ = tx.send(price);
-            }
-        }
-    }
-
-    #[async_trait]
-    impl PriceFeed for MockPriceFeed {
-        async fn subscribe(&mut self, _asset: &str) -> GridResult<UnboundedReceiver<f64>> {
-            let (tx, rx) = mpsc::unbounded_channel();
-            self.tx = Some(tx);
-            Ok(rx)
-        }
-
-        async fn unsubscribe(&mut self) -> GridResult<()> {
-            self.tx = None;
-            Ok(())
-        }
-    }
-
-    /// Mock fill feed for testing
-    pub struct MockFillFeed {
-        tx: Option<UnboundedSender<GridFill>>,
-    }
-
-    impl MockFillFeed {
-        pub fn new() -> Self {
-            Self { tx: None }
-        }
-
-        pub fn send_fill(&self, fill: GridFill) {
-            if let Some(tx) = &self.tx {
-                let _ = tx.send(fill);
-            }
-        }
-    }
-
-    #[async_trait]
-    impl FillFeed for MockFillFeed {
-        async fn subscribe(&mut self) -> GridResult<UnboundedReceiver<GridFill>> {
-            let (tx, rx) = mpsc::unbounded_channel();
-            self.tx = Some(tx);
-            Ok(rx)
-        }
-
-        async fn unsubscribe(&mut self) -> GridResult<()> {
-            self.tx = None;
-            Ok(())
         }
     }
 }
