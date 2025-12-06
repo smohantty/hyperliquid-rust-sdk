@@ -38,7 +38,7 @@ use tokio::time::interval;
 
 use hyperliquid_rust_sdk::{
     grid::{
-        config::AssetPrecision, GridConfig, GridStrategy, MarketType,
+        config::AssetPrecision, GridConfig, GridSpacing, GridStrategy, MarketType,
         StateManager, BotStatus, OrderSide, LevelStatus,
     },
     BaseUrl, ExchangeClient, InfoClient, Message, Subscription, TradeInfo,
@@ -215,7 +215,11 @@ async fn main() {
         return;
     }
 
-    let strategy = GridStrategy::arithmetic();
+    let strategy = match config.grid_spacing {
+        GridSpacing::Arithmetic => GridStrategy::arithmetic(),
+        GridSpacing::Geometric => GridStrategy::geometric(),
+    };
+    info!("Grid spacing: {:?}", config.grid_spacing);
     let levels = strategy.calculate_grid_levels(&config, &precision);
     info!("Created {} grid levels", levels.len());
 
@@ -969,5 +973,5 @@ async fn fetch_asset_precision(info_client: &InfoClient, asset: &str, market_typ
 }
 
 fn create_example_config() -> GridConfig {
-    GridConfig::new("PURR/USDC", 0.001, 0.002, 10, 100.0, MarketType::Spot)
+    GridConfig::new("HYPE/USDC", 25.0, 33.0, 20, 100.0, MarketType::Spot)
 }

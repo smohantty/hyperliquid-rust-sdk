@@ -30,7 +30,7 @@ pub mod strategy;
 pub mod types;
 
 // Re-export commonly used types
-pub use config::{AssetPrecision, GridConfig, InitialPositionMethod, MarketType};
+pub use config::{AssetPrecision, GridConfig, GridSpacing, InitialPositionMethod, MarketType};
 pub use errors::{GridError, GridResult};
 pub use state::{GridState, StateManager};
 pub use strategy::{FillResult, GridStrategy, GridType, InitialPosition};

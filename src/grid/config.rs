@@ -34,6 +34,21 @@ impl Default for InitialPositionMethod {
     }
 }
 
+/// Grid spacing type
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum GridSpacing {
+    /// Uniform price spacing (e.g., $100, $110, $120)
+    Arithmetic,
+    /// Percentage-based spacing (e.g., +10%, +10%, +10%)
+    Geometric,
+}
+
+impl Default for GridSpacing {
+    fn default() -> Self {
+        Self::Arithmetic
+    }
+}
+
 /// Asset precision information fetched from exchange meta
 ///
 /// According to Hyperliquid docs:
@@ -128,6 +143,10 @@ pub struct GridConfig {
     #[serde(default)]
     pub initial_position_method: InitialPositionMethod,
 
+    /// Grid spacing type (Arithmetic or Geometric)
+    #[serde(default)]
+    pub grid_spacing: GridSpacing,
+
     /// State persistence file path
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub state_file: Option<PathBuf>,
@@ -192,11 +211,18 @@ impl GridConfig {
             leverage: None,
             max_margin_ratio: None,
             initial_position_method: InitialPositionMethod::default(),
+            grid_spacing: GridSpacing::default(),
             state_file: Some(state_file),
             state_save_interval_secs: default_save_interval(),
             max_order_retries: default_max_retries(),
             retry_base_delay_ms: default_retry_base_delay(),
         }
+    }
+
+    /// Builder: set grid spacing type
+    pub fn with_grid_spacing(mut self, spacing: GridSpacing) -> Self {
+        self.grid_spacing = spacing;
+        self
     }
 
     /// Generate a unique state filename based on asset, market type, and timestamp
