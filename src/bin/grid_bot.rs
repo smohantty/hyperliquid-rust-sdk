@@ -584,36 +584,25 @@ async fn dashboard_handler(State(state): State<AppState>) -> Html<String> {
             price_marker_inserted = true;
         }
 
-        // Determine row styling based on side and order status
-        let (bg_color, text_color, icon) = if l.has_order {
-            if l.side == "Buy" {
-                ("rgba(34, 197, 94, 0.15)", "#22c55e", "🟢") // Green for active buy
-            } else {
-                ("rgba(239, 68, 68, 0.15)", "#ef4444", "🔴") // Red for active sell
-            }
-        } else {
-            if l.side == "Buy" {
-                ("transparent", "#4ade80", "○") // Light green for empty buy
-            } else {
-                ("transparent", "#f87171", "○") // Light red for empty sell
-            }
-        };
+        // Determine styling - only color the Buy/Sell text
+        let side_color = if l.side == "Buy" { "#22c55e" } else { "#ef4444" }; // Green for Buy, Red for Sell
+        let icon = if l.has_order { "●" } else { "○" };
+        let icon_color = if l.has_order { side_color } else { "#6b7280" };
 
         let status_badge = if l.has_order {
-            format!(r#"<span style="background: {}; padding: 2px 8px; border-radius: 4px; font-size: 11px;">ACTIVE</span>"#, 
-                if l.side == "Buy" { "#22c55e" } else { "#ef4444" })
+            format!(r#"<span style="background: {}; color: white; padding: 2px 8px; border-radius: 4px; font-size: 11px;">ACTIVE</span>"#, side_color)
         } else {
             format!(r#"<span style="color: #6b7280; font-size: 11px;">{}</span>"#, l.status)
         };
 
         levels_html.push_str(&format!(
-            r#"<tr style="background: {}; color: {};">
-                <td>{} {}</td>
+            r#"<tr>
+                <td><span style="color: {};">{}</span> {}</td>
                 <td style="font-family: monospace;">${:.4}</td>
-                <td><span style="font-weight: bold;">{}</span></td>
+                <td><span style="color: {}; font-weight: bold;">{}</span></td>
                 <td>{}</td>
             </tr>"#,
-            bg_color, text_color, icon, l.index, l.price, l.side, status_badge
+            icon_color, icon, l.index, l.price, side_color, l.side, status_badge
         ));
     }
 
