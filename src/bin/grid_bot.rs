@@ -38,7 +38,7 @@ use tokio::time::interval;
 
 use hyperliquid_rust_sdk::{
     grid::{
-        config::AssetPrecision, GridConfig, GridSpacing, GridStrategy, MarketType,
+        config::AssetPrecision, GridConfig, GridStrategy, MarketType,
         StateManager, BotStatus, OrderSide, LevelStatus,
     },
     BaseUrl, ExchangeClient, InfoClient, Message, Subscription, TradeInfo,
@@ -126,7 +126,7 @@ async fn main() {
                 }
             }
             if !found {
-                warn!("No .env file found (searched current directory and parents). Using system environment variables");
+                warn!("No .env file found (searched current directory and parents). PRIVATE_KEY must be in .env file.");
             }
         }
     }
@@ -160,14 +160,14 @@ async fn main() {
         create_example_config()
     };
 
+    // PRIVATE_KEY must be in .env file only (for security)
     let private_key = match env::var("PRIVATE_KEY") {
         Ok(key) => key,
         Err(_) => {
-            error!("PRIVATE_KEY environment variable not found!");
-            error!("Either:");
-            error!("  1. Create a .env file in the project root with: PRIVATE_KEY=0xYourPrivateKeyHere");
-            error!("  2. Or export it: export PRIVATE_KEY=0xYourPrivateKeyHere");
-            error!("  3. Or run with: PRIVATE_KEY=0x... ./target/release/grid_bot --config file.json");
+            error!("PRIVATE_KEY not found in .env file!");
+            error!("Create a .env file in the project root with:");
+            error!("  PRIVATE_KEY=0xYourPrivateKeyHere");
+            error!("Note: PRIVATE_KEY must be set in .env file for security reasons.");
             return;
         }
     };
@@ -255,11 +255,10 @@ async fn main() {
         return;
     }
 
-    let strategy = match config.grid_spacing {
-        GridSpacing::Arithmetic => GridStrategy::arithmetic(),
-        GridSpacing::Geometric => GridStrategy::geometric(),
+    let strategy = GridStrategy {
+        grid_mode: config.grid_mode,
     };
-    info!("Grid spacing: {:?}", config.grid_spacing);
+    info!("Grid mode: {:?}", config.grid_mode);
     let levels = strategy.calculate_grid_levels(&config, &precision);
     info!("Created {} grid levels", levels.len());
 

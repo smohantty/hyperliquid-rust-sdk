@@ -35,16 +35,16 @@ impl Default for InitialPositionMethod {
     }
 }
 
-/// Grid spacing type
+/// Grid mode type
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum GridSpacing {
+pub enum GridMode {
     /// Uniform price spacing (e.g., $100, $110, $120)
     Arithmetic,
     /// Percentage-based spacing (e.g., +10%, +10%, +10%)
     Geometric,
 }
 
-impl Default for GridSpacing {
+impl Default for GridMode {
     fn default() -> Self {
         Self::Arithmetic
     }
@@ -157,9 +157,9 @@ pub struct GridConfig {
     #[serde(default)]
     pub initial_position_method: InitialPositionMethod,
 
-    /// Grid spacing type (Arithmetic or Geometric)
-    #[serde(default)]
-    pub grid_spacing: GridSpacing,
+    /// Grid mode type (Arithmetic or Geometric)
+    #[serde(default, rename = "grid_spacing")]
+    pub grid_mode: GridMode,
 
     /// State persistence file path
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -225,7 +225,7 @@ impl GridConfig {
             leverage: None,
             max_margin_ratio: None,
             initial_position_method: InitialPositionMethod::default(),
-            grid_spacing: GridSpacing::default(),
+            grid_mode: GridMode::default(),
             state_file: Some(state_file),
             state_save_interval_secs: default_save_interval(),
             max_order_retries: default_max_retries(),
@@ -234,8 +234,8 @@ impl GridConfig {
     }
 
     /// Builder: set grid spacing type
-    pub fn with_grid_spacing(mut self, spacing: GridSpacing) -> Self {
-        self.grid_spacing = spacing;
+    pub fn with_grid_mode(mut self, mode: GridMode) -> Self {
+        self.grid_mode = mode;
         self
     }
 

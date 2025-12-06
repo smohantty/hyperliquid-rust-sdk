@@ -2,20 +2,9 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::config::{AssetPrecision, GridConfig};
+use super::config::{AssetPrecision, GridConfig, GridMode};
 use super::types::{GridFill, GridLevel, GridOrderRequest, LevelStatus, OrderSide};
 
-/// Type of grid spacing
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-pub enum GridType {
-    /// Uniform price spacing: each level is separated by the same dollar amount
-    /// Good for stable assets with predictable price ranges
-    #[default]
-    Arithmetic,
-    /// Percentage-based spacing: each level is separated by the same percentage
-    /// Good for volatile assets where percentage moves matter more than absolute moves
-    Geometric,
-}
 
 /// Result of calculating initial position requirements
 #[derive(Debug, Clone)]
@@ -46,37 +35,23 @@ pub struct FillResult {
 /// Grid strategy - calculates levels and handles fills
 #[derive(Debug, Clone, Copy, Default)]
 pub struct GridStrategy {
-    pub grid_type: GridType,
+    pub grid_mode: GridMode,
 }
 
 impl GridStrategy {
-    /// Create a new arithmetic (uniform spacing) grid strategy
-    pub fn arithmetic() -> Self {
-        Self {
-            grid_type: GridType::Arithmetic,
-        }
-    }
-
-    /// Create a new geometric (percentage spacing) grid strategy
-    pub fn geometric() -> Self {
-        Self {
-            grid_type: GridType::Geometric,
-        }
-    }
-
     /// Calculate all grid price levels based on grid type
     pub fn calculate_grid_levels(&self, config: &GridConfig, precision: &AssetPrecision) -> Vec<GridLevel> {
         let num_levels = config.num_levels();
 
         (0..num_levels)
             .map(|i| {
-                let raw_price = match self.grid_type {
-                    GridType::Arithmetic => {
+                let raw_price = match self.grid_mode {
+                    GridMode::Arithmetic => {
                         // Uniform spacing: lower + step * i
                         let price_step = config.price_step();
                         config.lower_price + price_step * i as f64
                     }
-                    GridType::Geometric => {
+                    GridMode::Geometric => {
                         // Percentage spacing: lower * ratio^i
                         let ratio = (config.upper_price / config.lower_price)
                             .powf(1.0 / config.num_grids as f64);
@@ -262,7 +237,7 @@ mod tests {
     fn test_arithmetic_grid_levels() {
         let config = GridConfig::new("BTC", 100.0, 200.0, 10, 1500.0, MarketType::Spot);
         let precision = AssetPrecision::for_spot(4);
-        let strategy = GridStrategy::arithmetic();
+        let strategy = GridStrategy { grid_mode: GridMode::Arithmetic };
 
         let levels = strategy.calculate_grid_levels(&config, &precision);
 
@@ -282,7 +257,7 @@ mod tests {
     fn test_geometric_grid_levels() {
         let config = GridConfig::new("BTC", 100.0, 200.0, 10, 1500.0, MarketType::Spot);
         let precision = AssetPrecision::for_spot(4);
-        let strategy = GridStrategy::geometric();
+        let strategy = GridStrategy { grid_mode: GridMode::Geometric };
 
         let levels = strategy.calculate_grid_levels(&config, &precision);
 
@@ -302,7 +277,7 @@ mod tests {
     fn test_initial_position_calculation() {
         let config = GridConfig::new("BTC", 100.0, 200.0, 10, 1500.0, MarketType::Spot);
         let precision = AssetPrecision::for_spot(4);
-        let strategy = GridStrategy::arithmetic();
+        let strategy = GridStrategy { grid_mode: GridMode::Arithmetic };
 
         let levels = strategy.calculate_grid_levels(&config, &precision);
         let current_price = 150.0;
@@ -328,7 +303,7 @@ mod tests {
 
     #[test]
     fn test_determine_order_side() {
-        let strategy = GridStrategy::arithmetic();
+        let strategy = GridStrategy { grid_mode: GridMode::Arithmetic };
 
         assert_eq!(strategy.determine_order_side(100.0, 150.0), OrderSide::Buy);
         assert_eq!(strategy.determine_order_side(200.0, 150.0), OrderSide::Sell);
@@ -336,7 +311,7 @@ mod tests {
 
     #[test]
     fn test_calculate_profit() {
-        let strategy = GridStrategy::arithmetic();
+        let strategy = GridStrategy { grid_mode: GridMode::Arithmetic };
 
         let profit = strategy.calculate_profit(100.0, 110.0, 1.0, 0.5);
         assert!((profit - 9.5).abs() < 0.01); // (110-100)*1 - 0.5 = 9.5
