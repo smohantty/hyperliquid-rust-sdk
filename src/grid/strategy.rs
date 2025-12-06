@@ -38,21 +38,27 @@ pub struct GridStrategy {
 
 impl GridStrategy {
     /// Calculate all grid price levels based on grid type
+    /// Creates exactly num_grids levels (0 to num_grids-1)
+    ///
+    /// # Panics
+    /// Panics if num_grids < 2 (minimum requirement)
     pub fn calculate_grid_levels(&self, config: &GridConfig, precision: &AssetPrecision) -> Vec<GridLevel> {
-        let num_levels = config.num_levels();
+        assert!(config.num_grids >= 2, "num_grids must be at least 2 (got {})", config.num_grids);
 
-        (0..num_levels)
+        (0..config.num_grids)
             .map(|i| {
                 let raw_price = match self.grid_mode {
                     GridMode::Arithmetic => {
-                        // Uniform spacing: lower + step * i
-                        let price_step = config.price_step();
+                        // Uniform spacing: divide range into (num_grids-1) segments
+                        // Level 0 = lower_price, Level (num_grids-1) = upper_price
+                        let price_step = (config.upper_price - config.lower_price) / (config.num_grids - 1) as f64;
                         config.lower_price + price_step * i as f64
                     }
                     GridMode::Geometric => {
-                        // Percentage spacing: lower * ratio^i
+                        // Percentage spacing: divide range into (num_grids-1) segments
+                        // Level 0 = lower_price, Level (num_grids-1) = upper_price
                         let ratio = (config.upper_price / config.lower_price)
-                            .powf(1.0 / config.num_grids as f64);
+                            .powf(1.0 / (config.num_grids - 1) as f64);
                         config.lower_price * ratio.powi(i as i32)
                     }
                 };
@@ -239,9 +245,9 @@ mod tests {
 
         let levels = strategy.calculate_grid_levels(&config, &precision);
 
-        assert_eq!(levels.len(), 11); // 10 grids = 11 levels
+        assert_eq!(levels.len(), 10); // Exactly num_grids levels (0 to 9)
         assert!((levels[0].price - 100.0).abs() < 0.01);
-        assert!((levels[10].price - 200.0).abs() < 0.01);
+        assert!((levels[9].price - 200.0).abs() < 0.01);
 
         // Check spacing is uniform (same dollar amount between levels)
         let step = levels[1].price - levels[0].price;
@@ -259,15 +265,17 @@ mod tests {
 
         let levels = strategy.calculate_grid_levels(&config, &precision);
 
-        assert_eq!(levels.len(), 11);
+        assert_eq!(levels.len(), 10); // Exactly num_grids levels (0 to 9)
         assert!((levels[0].price - 100.0).abs() < 0.01);
-        assert!((levels[10].price - 200.0).abs() < 1.0);
+        assert!((levels[9].price - 200.0).abs() < 1.0);
 
         // Check percentage spacing is uniform (same ratio between levels)
-        let ratio = levels[1].price / levels[0].price;
-        for i in 1..levels.len() - 1 {
-            let actual_ratio = levels[i + 1].price / levels[i].price;
-            assert!((actual_ratio - ratio).abs() < 0.01);
+        if levels.len() > 1 {
+            let ratio = levels[1].price / levels[0].price;
+            for i in 1..levels.len() - 1 {
+                let actual_ratio = levels[i + 1].price / levels[i].price;
+                assert!((actual_ratio - ratio).abs() < 0.01);
+            }
         }
     }
 
@@ -288,7 +296,7 @@ mod tests {
         assert!(init.initial_buy_order.is_some());
 
         // Grid orders should not include the level at current price
-        assert_eq!(init.grid_orders.len(), 10); // 11 levels - 1 skipped
+        assert_eq!(init.grid_orders.len(), 9); // 10 levels - 1 skipped
 
         // Lower price = more coins (larger order size)
         let buy_orders: Vec<_> = init.grid_orders.iter().filter(|o| o.side == OrderSide::Buy).collect();

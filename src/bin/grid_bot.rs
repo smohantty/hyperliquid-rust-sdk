@@ -250,10 +250,13 @@ async fn main() {
 
     info!("Initial price: {}", initial_price);
 
-    if initial_price < config.lower_price || initial_price > config.upper_price {
-        error!("Price {} is outside grid range [{}, {}]", initial_price, config.lower_price, config.upper_price);
-        return;
-    }
+    // Determine initial bot status
+    let initial_status = if initial_price < config.lower_price || initial_price > config.upper_price {
+        info!("Price {} is outside grid range [{}, {}], waiting for entry...", initial_price, config.lower_price, config.upper_price);
+        BotStatus::WaitingForEntry
+    } else {
+        BotStatus::AcquiringFunds
+    };
 
     let strategy = GridStrategy {
         grid_mode: config.grid_mode,
@@ -316,21 +319,7 @@ async fn main() {
         axum::serve(listener, app).await.unwrap();
     });
 
-    // Create bot
-    let mut bot = GridBot {
-        config,
-        asset_key,
-        precision,
-        strategy,
-        state_manager,
-        exchange_client,
-        latest_price: initial_price,
-        status: BotStatus::Initializing,
-        bot_status,
-        start_time: std::time::Instant::now(),
-    };
-
-    // Subscribe to WebSocket feeds
+    // Subscribe to WebSocket feeds first (before moving info_client into bot)
     let (sender, mut receiver) = unbounded_channel();
 
     info_client
@@ -344,6 +333,31 @@ async fn main() {
         .unwrap();
 
     info!("Subscribed to WebSocket feeds");
+
+    // Create bot (now we can move info_client into it)
+    let mut bot = GridBot {
+        config,
+        asset_key,
+        precision,
+        strategy,
+        state_manager,
+        exchange_client,
+        info_client,
+        user_address,
+        latest_price: initial_price,
+        status: initial_status,
+        bot_status,
+        start_time: std::time::Instant::now(),
+    };
+
+    // Check and acquire funds if needed before starting (only if not waiting for entry)
+    bot.update_status().await;
+    if bot.status == BotStatus::AcquiringFunds {
+        if let Err(e) = bot.check_and_acquire_funds().await {
+            error!("Failed to acquire funds: {}", e);
+            return;
+        }
+    }
 
     // Place initial grid orders
     if let Err(e) = bot.place_initial_orders().await {
@@ -374,7 +388,15 @@ async fn main() {
                                     let trigger_met = bot.config.trigger_price.map_or(true, |tp| price <= tp);
 
                                     if in_range && trigger_met {
-                                        info!("Price {} entered grid range! Starting grid bot...", price);
+                                        info!("Price {} entered grid range! Checking funds...", price);
+                                        bot.status = BotStatus::AcquiringFunds;
+                                        bot.update_status().await;
+
+                                        if let Err(e) = bot.check_and_acquire_funds().await {
+                                            error!("Failed to acquire funds: {}", e);
+                                            continue; // Wait for next price update
+                                        }
+
                                         if let Err(e) = bot.place_initial_orders().await {
                                             error!("Failed to place initial orders: {}", e);
                                         } else {
@@ -423,6 +445,8 @@ struct GridBot {
     strategy: GridStrategy,
     state_manager: StateManager,
     exchange_client: ExchangeClient,
+    info_client: InfoClient,
+    user_address: alloy::primitives::Address,
     latest_price: f64,
     status: BotStatus,
     bot_status: Arc<RwLock<BotStatusData>>,
@@ -430,6 +454,86 @@ struct GridBot {
 }
 
 impl GridBot {
+    /// Check balances and acquire assets if needed
+    /// For spot: checks USDC balance and base asset balance for sell orders
+    async fn check_and_acquire_funds(&mut self) -> Result<(), String> {
+        if self.config.market_type != MarketType::Spot {
+            // For perp, we don't need to check balances separately
+            self.status = BotStatus::Initializing;
+            return Ok(());
+        }
+
+        // Get all balances
+        let balances = self.info_client
+            .user_token_balances(self.user_address)
+            .await
+            .map_err(|e| format!("Failed to fetch balances: {}", e))?;
+
+        let usdc_balance = balances.balances
+            .iter()
+            .find(|b| b.coin == "USDC")
+            .and_then(|b| b.total.parse::<f64>().ok())
+            .unwrap_or(0.0);
+
+        // Get base asset name (e.g., "HYPE" from "HYPE/USDC")
+        let base_asset = self.config.asset.split('/').next().unwrap_or(&self.config.asset);
+        let base_balance = balances.balances
+            .iter()
+            .find(|b| b.coin == base_asset)
+            .and_then(|b| b.total.parse::<f64>().ok())
+            .unwrap_or(0.0);
+
+        info!("Current balances - USDC: {:.2}, {}: {:.2}", usdc_balance, base_asset, base_balance);
+
+        // Calculate how much base asset we need for sell orders
+        let init_pos = self.strategy.calculate_initial_position(
+            &self.config, &self.precision, self.latest_price,
+            &self.state_manager.read().await.levels,
+        );
+
+        let base_needed = init_pos.base_amount_needed;
+        info!("Base asset needed for sell orders: {:.2}", base_needed);
+
+        // Calculate required USDC: total_investment for buy orders + initial buy order (if needed) + buffer
+        let mut required_usdc = self.config.total_investment * 1.05; // 5% buffer for fees and slippage
+
+        // Add USDC needed for initial buy order if we don't have enough base asset
+        if base_needed > base_balance {
+            let base_to_buy = base_needed - base_balance;
+            let buy_price = self.latest_price * 1.001; // Slightly above current price
+            let usdc_for_buy = base_to_buy * buy_price * 1.05; // 5% buffer for slippage
+            required_usdc += usdc_for_buy;
+            info!("Need to buy {:.2} {} @ ~{:.2}, requires additional {:.2} USDC",
+                  base_to_buy, base_asset, buy_price, usdc_for_buy);
+        }
+
+        if usdc_balance < required_usdc {
+            let needed = required_usdc - usdc_balance;
+            error!("Insufficient USDC balance! Have: {:.2}, Need: {:.2}, Missing: {:.2}",
+                   usdc_balance, required_usdc, needed);
+            error!("Required breakdown:");
+            error!("  - Grid buy orders: {:.2} USDC", self.config.total_investment * 1.05);
+            if base_needed > base_balance {
+                let base_to_buy = base_needed - base_balance;
+                let buy_price = self.latest_price * 1.001;
+                error!("  - Initial buy order ({:.2} {} @ ~{:.2}): {:.2} USDC",
+                       base_to_buy, base_asset, buy_price, base_to_buy * buy_price * 1.05);
+            }
+            error!("Please deposit {:.2} USDC to your account before running the bot", needed);
+            return Err(format!("Insufficient USDC balance. Need {:.2}, have {:.2}", required_usdc, usdc_balance));
+        }
+
+        info!("Sufficient USDC balance: {:.2} (required: {:.2})", usdc_balance, required_usdc);
+        if base_needed <= base_balance {
+            info!("Sufficient {} balance: {:.2} (needed: {:.2})", base_asset, base_balance, base_needed);
+        } else {
+            info!("Will acquire {:.2} {} via initial buy order", base_needed - base_balance, base_asset);
+        }
+
+        self.status = BotStatus::Initializing;
+        Ok(())
+    }
+
     async fn update_status(&self) {
         let state = self.state_manager.read().await;
 
@@ -465,13 +569,78 @@ impl GridBot {
             &self.state_manager.read().await.levels,
         );
 
-        info!("Placing {} grid orders...", init_pos.grid_orders.len());
+        // Step 1: Check base asset balance and place initial buy order if needed
+        if let Some(init_buy) = &init_pos.initial_buy_order {
+            // Check current base asset balance
+            let balances = self.info_client
+                .user_token_balances(self.user_address)
+                .await
+                .map_err(|e| format!("Failed to fetch balances: {}", e))?;
+
+            let base_asset = self.config.asset.split('/').next().unwrap_or(&self.config.asset);
+            let base_balance = balances.balances
+                .iter()
+                .find(|b| b.coin == base_asset)
+                .and_then(|b| b.total.parse::<f64>().ok())
+                .unwrap_or(0.0);
+
+            info!("Current {} balance: {:.2}, needed: {:.2}", base_asset, base_balance, init_buy.size);
+
+            if base_balance < init_buy.size {
+                let base_to_buy = init_buy.size - base_balance;
+                let buy_price = init_buy.price;
+                let usdc_needed = base_to_buy * buy_price;
+
+                // Check if we have enough USDC for this buy
+                let usdc_balance = balances.balances
+                    .iter()
+                    .find(|b| b.coin == "USDC")
+                    .and_then(|b| b.total.parse::<f64>().ok())
+                    .unwrap_or(0.0);
+
+                if usdc_balance < usdc_needed {
+                    return Err(format!(
+                        "Insufficient USDC for initial buy order! Need {:.2} USDC to buy {:.2} {} @ {}, have {:.2} USDC",
+                        usdc_needed, base_to_buy, base_asset, buy_price, usdc_balance
+                    ));
+                }
+
+                info!("Placing initial buy order to acquire {:.2} {} @ {} (cost: {:.2} USDC)",
+                      base_to_buy, base_asset, buy_price, usdc_needed);
+
+                // Adjust size to only buy what we need
+                let adjusted_size = self.precision.round_size(base_to_buy);
+
+                match self.place_order(buy_price, adjusted_size, true, None).await {
+                    Ok(oid) => {
+                        info!("Initial buy order placed: oid={}, waiting for fill...", oid);
+                        // Wait for the order to fill
+                        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+                    }
+                    Err(e) => {
+                        return Err(format!("Failed to place initial buy order: {}", e));
+                    }
+                }
+            } else {
+                info!("Already have sufficient {} balance ({:.2} >= {:.2})", base_asset, base_balance, init_buy.size);
+            }
+        }
+
+        // Step 2: Place grid orders
+        // Separate buy and sell orders - place buys first, then sells
+        let (buy_orders, sell_orders): (Vec<_>, Vec<_>) = init_pos.grid_orders
+            .into_iter()
+            .partition(|o| o.side == OrderSide::Buy);
+
+        info!("Placing {} buy orders and {} sell orders...", buy_orders.len(), sell_orders.len());
 
         let mut placed = 0;
-        for order in init_pos.grid_orders {
+
+        // Place buy orders first
+        for order in buy_orders {
             info!("place_initial_orders: level={}, side={:?}, price={}, size={}",
                    order.level_index, order.side, order.price, order.size);
-            match self.place_order(order.price, order.size, order.side == OrderSide::Buy, Some(order.level_index)).await {
+            match self.place_order(order.price, order.size, true, Some(order.level_index)).await {
                 Ok(oid) => {
                     placed += 1;
                     self.state_manager.update(|state| {
@@ -483,7 +652,33 @@ impl GridBot {
                     }).await.ok();
                 }
                 Err(e) => {
-                    warn!("Failed to place order at {}: {}", order.price, e);
+                    warn!("Failed to place buy order at {}: {}", order.price, e);
+                }
+            }
+        }
+
+        // Place sell orders after buys (and after initial buy has time to fill)
+        // Give a bit more time for initial buy to fill if it hasn't already
+        if !sell_orders.is_empty() && init_pos.initial_buy_order.is_some() {
+            tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+        }
+
+        for order in sell_orders {
+            info!("place_initial_orders: level={}, side={:?}, price={}, size={}",
+                   order.level_index, order.side, order.price, order.size);
+            match self.place_order(order.price, order.size, false, Some(order.level_index)).await {
+                Ok(oid) => {
+                    placed += 1;
+                    self.state_manager.update(|state| {
+                        state.register_order(order.level_index, oid);
+                        if let Some(level) = state.get_level_mut(order.level_index) {
+                            level.oid = Some(oid);
+                            level.status = LevelStatus::Active;
+                        }
+                    }).await.ok();
+                }
+                Err(e) => {
+                    warn!("Failed to place sell order at {}: {} (may need more base asset)", order.price, e);
                 }
             }
         }

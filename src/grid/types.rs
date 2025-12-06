@@ -41,6 +41,8 @@ impl From<&str> for OrderSide {
 pub enum BotStatus {
     /// Waiting for trigger price to be hit
     WaitingForEntry,
+    /// Acquiring quote asset (e.g., USDC) for trading
+    AcquiringFunds,
     /// Placing initial base position
     Initializing,
     /// Normal grid operation

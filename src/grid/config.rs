@@ -1,7 +1,7 @@
 //! Grid trading configuration
 
 use chrono::Utc;
-use log::debug;
+use log::info;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -79,10 +79,10 @@ impl AssetPrecision {
 
     /// Create precision for a spot asset
     pub fn for_spot(sz_decimals: u32) -> Self {
-        const MAX_DECIMALS_SPOT: u32 = 8;
+        const MAX_DECIMALS_SPOT: u32 = 6;
         Self {
             sz_decimals,
-            price_decimals: MAX_DECIMALS_SPOT.saturating_sub(sz_decimals),
+            price_decimals: MAX_DECIMALS_SPOT.saturating_sub(sz_decimals + 1),
             max_decimals: MAX_DECIMALS_SPOT,
         }
     }
@@ -95,18 +95,13 @@ impl AssetPrecision {
     ///
     /// Reference: https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/tick-and-lot-size
     pub fn round_price(&self, price: f64, round_up: bool) -> f64 {
-        debug!("round_price: input={}, price_decimals={}, round_up={}",
-               price, self.price_decimals, round_up);
         let result = truncate_float(price, self.price_decimals, round_up);
-        debug!("round_price: output={} (from input={})", result, price);
         result
     }
 
     /// Round a size to the correct precision
     pub fn round_size(&self, size: f64) -> f64 {
-        debug!("round_size: input={}, sz_decimals={}", size, self.sz_decimals);
         let result = truncate_float(size, self.sz_decimals, false);
-        debug!("round_size: output={} (from input={})", result, size);
         result
     }
 }
@@ -200,9 +195,12 @@ impl GridConfig {
     /// * `asset` - Asset/coin to trade (e.g., "BTC", "PURR/USDC")
     /// * `lower_price` - Lower price boundary for the grid
     /// * `upper_price` - Upper price boundary for the grid
-    /// * `num_grids` - Number of grid levels
+    /// * `num_grids` - Number of grid levels (must be >= 2)
     /// * `total_investment` - Total USD amount to invest in the grid
     /// * `market_type` - Spot or Perp
+    ///
+    /// # Panics
+    /// Panics if `num_grids < 2` (minimum requirement for grid trading)
     pub fn new(
         asset: impl Into<String>,
         lower_price: f64,
@@ -211,6 +209,7 @@ impl GridConfig {
         total_investment: f64,
         market_type: MarketType,
     ) -> Self {
+        assert!(num_grids >= 2, "num_grids must be at least 2 (got {})", num_grids);
         let asset_str = asset.into();
         let state_file = Self::generate_state_filename(&asset_str, market_type);
 
@@ -449,8 +448,9 @@ mod tests {
         let config = GridConfig::new("BTC", 200.0, 100.0, 10, 1000.0, MarketType::Spot);
         assert!(config.validate().is_err());
 
-        // Invalid: num_grids < 2
-        let config = GridConfig::new("BTC", 100.0, 200.0, 1, 1000.0, MarketType::Spot);
+        // Invalid: num_grids < 2 (now panics in new(), so test with manual construction)
+        let mut config = GridConfig::new("BTC", 100.0, 200.0, 2, 1000.0, MarketType::Spot);
+        config.num_grids = 1; // Manually set invalid value
         assert!(config.validate().is_err());
 
         // Invalid: total_investment <= 0
