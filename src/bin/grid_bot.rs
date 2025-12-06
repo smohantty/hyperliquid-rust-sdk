@@ -574,9 +574,11 @@ async fn dashboard_handler(State(state): State<AppState>) -> Html<String> {
         // Insert current price marker when we pass it
         if !price_marker_inserted && l.price < current_price {
             levels_html.push_str(&format!(
-                r#"<tr style="background: linear-gradient(90deg, #fbbf24 0%, #0f172a 100%);">
-                    <td colspan="4" style="text-align: center; font-weight: bold; color: #fbbf24; padding: 8px;">
-                        ▶ CURRENT PRICE: ${:.4} ◀
+                r#"<tr class="price-marker">
+                    <td colspan="4">
+                        <div class="price-line">
+                            <span class="price-label">$ {:.4}</span>
+                        </div>
                     </td>
                 </tr>"#,
                 current_price
@@ -584,34 +586,30 @@ async fn dashboard_handler(State(state): State<AppState>) -> Html<String> {
             price_marker_inserted = true;
         }
 
-        // Determine styling - only color the Buy/Sell text
-        let side_color = if l.side == "Buy" { "#22c55e" } else { "#ef4444" }; // Green for Buy, Red for Sell
-        let icon = if l.has_order { "●" } else { "○" };
-        let icon_color = if l.has_order { side_color } else { "#6b7280" };
-
-        let status_badge = if l.has_order {
-            format!(r#"<span style="background: {}; color: white; padding: 2px 8px; border-radius: 4px; font-size: 11px;">ACTIVE</span>"#, side_color)
-        } else {
-            format!(r#"<span style="color: #6b7280; font-size: 11px;">{}</span>"#, l.status)
-        };
+        // Determine styling
+        let side_color = if l.side == "Buy" { "#22c55e" } else { "#ef4444" };
+        let row_class = if l.has_order { "level-active" } else { "level-empty" };
 
         levels_html.push_str(&format!(
-            r#"<tr>
-                <td><span style="color: {};">{}</span> {}</td>
-                <td style="font-family: monospace;">${:.4}</td>
-                <td><span style="color: {}; font-weight: bold;">{}</span></td>
-                <td>{}</td>
+            r#"<tr class="{}">
+                <td class="level-num">{}</td>
+                <td class="level-price">${:.4}</td>
+                <td><span class="side-badge" style="color: {}">{}</span></td>
+                <td class="level-status">{}</td>
             </tr>"#,
-            icon_color, icon, l.index, l.price, side_color, l.side, status_badge
+            row_class, l.index, l.price, side_color, l.side,
+            if l.has_order { "●" } else { "—" }
         ));
     }
 
     // If price is below all levels, add marker at bottom
     if !price_marker_inserted {
         levels_html.push_str(&format!(
-            r#"<tr style="background: linear-gradient(90deg, #fbbf24 0%, #0f172a 100%);">
-                <td colspan="4" style="text-align: center; font-weight: bold; color: #fbbf24; padding: 8px;">
-                    ▶ CURRENT PRICE: ${:.4} ◀
+            r#"<tr class="price-marker">
+                <td colspan="4">
+                    <div class="price-line">
+                        <span class="price-label">$ {:.4}</span>
+                    </div>
                 </td>
             </tr>"#,
             current_price
@@ -622,138 +620,266 @@ async fn dashboard_handler(State(state): State<AppState>) -> Html<String> {
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Grid Bot Status - {asset}</title>
+    <title>{asset} Grid Bot</title>
     <meta http-equiv="refresh" content="5">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
     <style>
+        :root {{
+            --bg-primary: #0a0a0f;
+            --bg-secondary: #12121a;
+            --bg-card: #1a1a24;
+            --border: #2a2a3a;
+            --text-primary: #ffffff;
+            --text-secondary: #8888a0;
+            --text-muted: #5a5a70;
+            --green: #00d4aa;
+            --red: #ff4d6a;
+            --yellow: #ffd93d;
+            --blue: #4d9fff;
+        }}
         * {{ margin: 0; padding: 0; box-sizing: border-box; }}
         body {{
-            font-family: 'SF Mono', 'Monaco', 'Consolas', monospace;
-            background: #0f172a;
-            color: #e2e8f0;
-            padding: 20px;
+            font-family: 'Inter', -apple-system, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            min-height: 100vh;
         }}
-        .container {{ max-width: 1200px; margin: 0 auto; }}
-        h1 {{
-            color: #38bdf8;
-            font-size: 24px;
-            margin-bottom: 20px;
+        .container {{ max-width: 1400px; margin: 0 auto; padding: 24px; }}
+        
+        header {{
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 32px;
+            padding-bottom: 24px;
+            border-bottom: 1px solid var(--border);
+        }}
+        .logo {{
             display: flex;
             align-items: center;
-            gap: 10px;
+            gap: 12px;
         }}
-        .status-badge {{
-            background: {status_color};
-            color: white;
-            padding: 4px 12px;
-            border-radius: 4px;
-            font-size: 14px;
+        .logo h1 {{
+            font-size: 20px;
+            font-weight: 600;
         }}
-        .grid {{
+        .logo .asset {{
+            color: var(--blue);
+        }}
+        .status-pill {{
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-size: 13px;
+            font-weight: 500;
+            background: {status_bg};
+        }}
+        .status-dot {{
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: {status_dot};
+            animation: pulse 2s infinite;
+        }}
+        @keyframes pulse {{
+            0%, 100% {{ opacity: 1; }}
+            50% {{ opacity: 0.5; }}
+        }}
+
+        .stats-grid {{
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
             gap: 16px;
-            margin-bottom: 24px;
+            margin-bottom: 32px;
         }}
-        .card {{
-            background: #1e293b;
-            border-radius: 8px;
-            padding: 16px;
-            border: 1px solid #334155;
+        .stat-card {{
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 20px;
         }}
-        .card-title {{
-            color: #94a3b8;
+        .stat-label {{
             font-size: 12px;
+            color: var(--text-muted);
             text-transform: uppercase;
-            letter-spacing: 1px;
+            letter-spacing: 0.5px;
             margin-bottom: 8px;
         }}
-        .card-value {{
+        .stat-value {{
+            font-family: 'JetBrains Mono', monospace;
             font-size: 24px;
-            font-weight: bold;
-            color: #f8fafc;
+            font-weight: 600;
         }}
-        .card-value.positive {{ color: #22c55e; }}
-        .card-value.negative {{ color: #ef4444; }}
+        .stat-value.green {{ color: var(--green); }}
+        .stat-value.red {{ color: var(--red); }}
+        .stat-sub {{
+            font-size: 12px;
+            color: var(--text-muted);
+            margin-top: 4px;
+        }}
+
+        .levels-card {{
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            overflow: hidden;
+        }}
+        .levels-header {{
+            padding: 16px 20px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }}
+        .levels-title {{
+            font-size: 14px;
+            font-weight: 600;
+        }}
+        .levels-count {{
+            font-size: 12px;
+            color: var(--text-muted);
+        }}
+
         table {{
             width: 100%;
             border-collapse: collapse;
-            font-size: 13px;
         }}
         th {{
             text-align: left;
-            padding: 12px 8px;
-            color: #94a3b8;
-            border-bottom: 1px solid #334155;
+            padding: 12px 20px;
+            font-size: 11px;
             font-weight: 500;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            background: var(--bg-secondary);
         }}
         td {{
-            padding: 8px;
-            border-bottom: 1px solid #1e293b;
+            padding: 10px 20px;
+            font-size: 13px;
+            border-bottom: 1px solid var(--border);
         }}
-        .footer {{
-            margin-top: 20px;
-            color: #64748b;
+        tr:hover {{ background: rgba(255,255,255,0.02); }}
+        
+        .level-num {{
+            font-family: 'JetBrains Mono', monospace;
+            color: var(--text-muted);
             font-size: 12px;
         }}
+        .level-price {{
+            font-family: 'JetBrains Mono', monospace;
+            font-weight: 500;
+        }}
+        .side-badge {{
+            font-weight: 600;
+            font-size: 12px;
+        }}
+        .level-status {{
+            font-size: 16px;
+        }}
+        .level-active {{ background: rgba(255,255,255,0.03); }}
+        .level-empty td {{ color: var(--text-secondary); }}
+
+        .price-marker td {{
+            padding: 0 !important;
+            border: none !important;
+        }}
+        .price-line {{
+            display: flex;
+            align-items: center;
+            padding: 4px 20px;
+        }}
+        .price-line::before,
+        .price-line::after {{
+            content: '';
+            flex: 1;
+            height: 1px;
+            background: var(--yellow);
+        }}
+        .price-label {{
+            padding: 4px 16px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--yellow);
+        }}
+
+        footer {{
+            margin-top: 24px;
+            padding-top: 16px;
+            border-top: 1px solid var(--border);
+            display: flex;
+            justify-content: space-between;
+            font-size: 12px;
+            color: var(--text-muted);
+        }}
+        footer a {{ color: var(--blue); text-decoration: none; }}
+        footer a:hover {{ text-decoration: underline; }}
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>
-            📊 Grid Bot
-            <span class="status-badge">{status}</span>
-        </h1>
+        <header>
+            <div class="logo">
+                <h1>Grid Bot · <span class="asset">{asset}</span></h1>
+            </div>
+            <div class="status-pill">
+                <span class="status-dot"></span>
+                {status}
+            </div>
+        </header>
 
-        <div class="grid">
-            <div class="card">
-                <div class="card-title">Asset</div>
-                <div class="card-value">{asset}</div>
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-label">Current Price</div>
+                <div class="stat-value">${current_price:.4}</div>
             </div>
-            <div class="card">
-                <div class="card-title">Current Price</div>
-                <div class="card-value">${current_price:.4}</div>
+            <div class="stat-card">
+                <div class="stat-label">Grid Range</div>
+                <div class="stat-value">${lower_price:.2} — ${upper_price:.2}</div>
             </div>
-            <div class="card">
-                <div class="card-title">Grid Range</div>
-                <div class="card-value">${lower_price:.2} - ${upper_price:.2}</div>
+            <div class="stat-card">
+                <div class="stat-label">Position</div>
+                <div class="stat-value">{position:.4}</div>
             </div>
-            <div class="card">
-                <div class="card-title">Position</div>
-                <div class="card-value">{position:.4}</div>
+            <div class="stat-card">
+                <div class="stat-label">Net Profit</div>
+                <div class="stat-value {profit_class}">${net_profit:.4}</div>
             </div>
-            <div class="card">
-                <div class="card-title">Net Profit</div>
-                <div class="card-value {profit_class}">${net_profit:.4}</div>
+            <div class="stat-card">
+                <div class="stat-label">Round Trips</div>
+                <div class="stat-value">{round_trips}</div>
             </div>
-            <div class="card">
-                <div class="card-title">Round Trips</div>
-                <div class="card-value">{round_trips}</div>
+            <div class="stat-card">
+                <div class="stat-label">Active Orders</div>
+                <div class="stat-value"><span class="green">{active_buys}</span> / <span class="red">{active_sells}</span></div>
+                <div class="stat-sub">Buy / Sell</div>
             </div>
-            <div class="card">
-                <div class="card-title">Active Orders</div>
-                <div class="card-value" style="color: #22c55e">{active_buys} Buy</div>
-                <div class="card-value" style="color: #ef4444">{active_sells} Sell</div>
+            <div class="stat-card">
+                <div class="stat-label">Investment</div>
+                <div class="stat-value">${total_investment:.0}</div>
+                <div class="stat-sub">${usd_per_grid:.2} per grid</div>
             </div>
-            <div class="card">
-                <div class="card-title">Investment</div>
-                <div class="card-value">${total_investment:.0}</div>
-                <div style="color: #64748b; font-size: 12px">${usd_per_grid:.2}/grid</div>
-            </div>
-            <div class="card">
-                <div class="card-title">Uptime</div>
-                <div class="card-value">{uptime}</div>
+            <div class="stat-card">
+                <div class="stat-label">Uptime</div>
+                <div class="stat-value">{uptime}</div>
             </div>
         </div>
 
-        <div class="card">
-            <div class="card-title">Grid Levels ({num_grids} grids)</div>
+        <div class="levels-card">
+            <div class="levels-header">
+                <span class="levels-title">Grid Levels</span>
+                <span class="levels-count">{num_grids} grids · {total_levels} levels</span>
+            </div>
             <table>
                 <thead>
                     <tr>
                         <th>Level</th>
                         <th>Price</th>
                         <th>Side</th>
-                        <th>Status</th>
+                        <th>Order</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -762,22 +888,24 @@ async fn dashboard_handler(State(state): State<AppState>) -> Html<String> {
             </table>
         </div>
 
-        <div class="footer">
-            Last updated: {last_updated} | Auto-refresh: 5s | <a href="/api/status" style="color: #38bdf8">JSON API</a>
-        </div>
+        <footer>
+            <span>Updated: {last_updated}</span>
+            <span>Auto-refresh: 5s · <a href="/api/status">JSON API</a></span>
+        </footer>
     </div>
 </body>
 </html>
 "##,
         asset = status.asset,
         status = status.status,
-        status_color = if status.status == "Running" { "#22c55e" } else { "#f59e0b" },
+        status_bg = if status.status == "Running" { "rgba(0,212,170,0.15)" } else { "rgba(255,77,106,0.15)" },
+        status_dot = if status.status == "Running" { "#00d4aa" } else { "#ff4d6a" },
         current_price = status.current_price,
         lower_price = status.lower_price,
         upper_price = status.upper_price,
         position = status.current_position,
         net_profit = status.net_profit,
-        profit_class = if status.net_profit >= 0.0 { "positive" } else { "negative" },
+        profit_class = if status.net_profit >= 0.0 { "green" } else { "red" },
         round_trips = status.round_trips,
         active_buys = status.active_buys,
         active_sells = status.active_sells,
@@ -785,6 +913,7 @@ async fn dashboard_handler(State(state): State<AppState>) -> Html<String> {
         usd_per_grid = status.usd_per_grid,
         uptime = format_duration(status.uptime_secs),
         num_grids = status.num_grids,
+        total_levels = status.total_levels,
         levels_html = levels_html,
         last_updated = status.last_updated,
     );
