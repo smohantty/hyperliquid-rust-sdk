@@ -1,8 +1,0 @@
-{
-  "asset": "HYPE/USDC",
-  "lower_price": 20,
-  "upper_price": 40,
-  "num_grids": 50,
-  "total_investment": 10000.0,
-  "market_type": "Spot"
-}

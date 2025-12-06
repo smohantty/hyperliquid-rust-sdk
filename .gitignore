@@ -10,3 +10,7 @@ Cargo.lock
 # Grid bot state files
 *_state.json
 grid_state.json
+grid_*.json
+
+# Grid bot config files (user-specific)
+*_grid_config.json
