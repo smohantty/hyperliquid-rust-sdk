@@ -103,21 +103,57 @@ struct LevelInfo {
 async fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
+    // Try to load .env file from current directory or search upward
     match dotenvy::dotenv() {
         Ok(path) => info!("Loaded environment from: {}", path.display()),
-        Err(_) => info!("No .env file found, using system environment variables"),
+        Err(_) => {
+            // Try finding .env in parent directories
+            let mut current_dir = std::env::current_dir().ok();
+            let mut found = false;
+            for _ in 0..5 {
+                if let Some(dir) = &current_dir {
+                    let env_path = dir.join(".env");
+                    if env_path.exists() {
+                        if dotenvy::from_path(&env_path).is_ok() {
+                            info!("Loaded environment from: {}", env_path.display());
+                            found = true;
+                            break;
+                        }
+                    }
+                    current_dir = dir.parent().map(|p| p.to_path_buf());
+                } else {
+                    break;
+                }
+            }
+            if !found {
+                warn!("No .env file found (searched current directory and parents). Using system environment variables");
+            }
+        }
     }
 
     // Parse arguments
+    // Handle both: `./grid_bot --config file.json` and `cargo run -- --config file.json`
     let args: Vec<String> = env::args().collect();
-    let config = if args.len() > 2 && args[1] == "--config" {
-        let config_path = PathBuf::from(&args[2]);
-        match GridConfig::load_from_file(&config_path) {
-            Ok(config) => config,
-            Err(e) => {
-                error!("Failed to load config: {}", e);
+    let config = if args.len() >= 3 {
+        // Find --config argument (skip "--" separator from cargo run)
+        let config_idx = args.iter().position(|a| a == "--config");
+        if let Some(idx) = config_idx {
+            if idx + 1 < args.len() {
+                let config_path = PathBuf::from(&args[idx + 1]);
+                match GridConfig::load_from_file(&config_path) {
+                    Ok(config) => config,
+                    Err(e) => {
+                        error!("Failed to load config from {}: {}", config_path.display(), e);
+                        return;
+                    }
+                }
+            } else {
+                error!("--config requires a file path");
                 return;
             }
+        } else {
+            info!("No config file provided, using example configuration");
+            create_example_config()
         }
     } else {
         info!("No config file provided, using example configuration");
@@ -127,7 +163,11 @@ async fn main() {
     let private_key = match env::var("PRIVATE_KEY") {
         Ok(key) => key,
         Err(_) => {
-            error!("PRIVATE_KEY not found! Create a .env file with: PRIVATE_KEY=0xYourPrivateKeyHere");
+            error!("PRIVATE_KEY environment variable not found!");
+            error!("Either:");
+            error!("  1. Create a .env file in the project root with: PRIVATE_KEY=0xYourPrivateKeyHere");
+            error!("  2. Or export it: export PRIVATE_KEY=0xYourPrivateKeyHere");
+            error!("  3. Or run with: PRIVATE_KEY=0x... ./target/release/grid_bot --config file.json");
             return;
         }
     };
