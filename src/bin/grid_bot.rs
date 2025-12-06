@@ -328,12 +328,12 @@ async fn main() {
                         if let Some(price_str) = all_mids.data.mids.get(&bot.asset_key) {
                             if let Ok(price) = price_str.parse::<f64>() {
                                 bot.latest_price = price;
-                                
+
                                 // Check if price entered grid range (for WaitingForEntry status)
                                 if bot.status == BotStatus::WaitingForEntry {
                                     let in_range = price >= bot.config.lower_price && price <= bot.config.upper_price;
                                     let trigger_met = bot.config.trigger_price.map_or(true, |tp| price <= tp);
-                                    
+
                                     if in_range && trigger_met {
                                         info!("Price {} entered grid range! Starting grid bot...", price);
                                         if let Err(e) = bot.place_initial_orders().await {

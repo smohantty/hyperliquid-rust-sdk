@@ -86,9 +86,49 @@ impl AssetPrecision {
         }
     }
 
-    /// Round a price to the correct precision
+    /// Round a price to the correct precision using truncate_float
+    /// 
+    /// Enforces Hyperliquid's tick size rules:
+    /// - Max 5 significant figures
+    /// - Max price_decimals decimal places (MAX_DECIMALS - szDecimals)
+    /// 
+    /// Uses truncate_float for the rounding operation.
     pub fn round_price(&self, price: f64, round_up: bool) -> f64 {
-        truncate_float(price, self.price_decimals, round_up)
+        // Integer prices are always allowed
+        if price.fract() == 0.0 {
+            return price;
+        }
+
+        let abs_price = price.abs();
+
+        // Calculate decimal places needed for 5 significant figures
+        let first_digit_pos = if abs_price >= 1.0 {
+            abs_price.log10().floor() as i32
+        } else {
+            abs_price.log10().ceil() as i32 - 1
+        };
+
+        // For 5 sig figs: need positions first_digit_pos down to (first_digit_pos - 4)
+        let decimals_for_5_sig = if first_digit_pos >= 0 {
+            (4i32 - first_digit_pos).max(0) as u32
+        } else {
+            (-first_digit_pos + 4) as u32
+        };
+
+        // Use minimum of sig figs constraint and max decimals constraint
+        let decimals = decimals_for_5_sig.min(self.price_decimals);
+
+        // For proper rounding (not just truncation), check next digit
+        let should_round_up = if round_up {
+            true
+        } else {
+            // Check digit after target decimals for round-to-nearest
+            let multiplier = 10f64.powi(decimals as i32 + 1);
+            let next_digit = ((abs_price * multiplier) as u64) % 10;
+            next_digit >= 5
+        };
+
+        truncate_float(price, decimals, should_round_up)
     }
 
     /// Round a size to the correct precision
@@ -518,5 +558,34 @@ mod tests {
 
         let rounded_size = precision.round_size(1.23456);
         assert!((rounded_size - 1.234).abs() < 0.0001);
+    }
+
+    #[test]
+    fn test_price_rounding_hyperliquid_rules() {
+        // Test with spot asset: szDecimals=2, price_decimals=6
+        let precision = AssetPrecision::for_spot(2);
+
+        // Test cases - should round to correct decimals and 5 sig figs
+        // 15.21732 -> should become 15.217 (3 decimals for 5 sig figs)
+        let price1 = precision.round_price(15.21732, false);
+        assert!((price1 - 15.217).abs() < 0.0001);
+
+        // 15.43779 -> should become 15.438 (3 decimals, rounds up)
+        let price2 = precision.round_price(15.43779, false);
+        assert!((price2 - 15.438).abs() < 0.0001);
+
+        // 17.320508 -> should become 17.321 (3 decimals for 5 sig figs)
+        let price3 = precision.round_price(17.320508, false);
+        assert!((price3 - 17.321).abs() < 0.0001);
+
+        // Integer prices should pass through unchanged
+        let price4 = precision.round_price(15.0, false);
+        assert!((price4 - 15.0).abs() < 0.0001);
+
+        // Test with perp: szDecimals=1, price_decimals=5
+        let perp_precision = AssetPrecision::for_perp(1);
+        // 1234.56 -> should become 1234.6 (1 decimal for 5 sig figs, rounds up)
+        let perp_price = perp_precision.round_price(1234.56, false);
+        assert!((perp_price - 1234.6).abs() < 0.01);
     }
 }
