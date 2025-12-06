@@ -3,6 +3,7 @@ mod consts;
 mod eip712;
 mod errors;
 mod exchange;
+pub mod grid;
 mod helpers;
 mod info;
 mod market_maker;
