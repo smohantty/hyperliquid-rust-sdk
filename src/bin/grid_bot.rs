@@ -59,32 +59,32 @@ struct BotStatusData {
     asset: String,
     market_type: String,
     status: String,
-    
+
     // Price info
     current_price: f64,
     lower_price: f64,
     upper_price: f64,
-    
+
     // Grid info
     num_grids: u32,
     total_levels: usize,
     active_buys: usize,
     active_sells: usize,
-    
+
     // Investment
     total_investment: f64,
     usd_per_grid: f64,
-    
+
     // Position & PnL
     current_position: f64,
     realized_pnl: f64,
     total_fees: f64,
     net_profit: f64,
     round_trips: u32,
-    
+
     // Grid levels (summary)
     levels: Vec<LevelInfo>,
-    
+
     // Timestamps
     uptime_secs: u64,
     last_updated: String,
@@ -369,7 +369,7 @@ struct GridBot {
 impl GridBot {
     async fn update_status(&self) {
         let state = self.state_manager.read().await;
-        
+
         let levels: Vec<LevelInfo> = state.levels.iter().map(|l| LevelInfo {
             index: l.index,
             price: l.price,
@@ -560,23 +560,74 @@ async fn status_handler(State(state): State<AppState>) -> Json<BotStatusData> {
 
 async fn dashboard_handler(State(state): State<AppState>) -> Html<String> {
     let status = state.bot_status.read().await;
-    
-    let levels_html: String = status.levels.iter().map(|l| {
-        let color = if l.has_order {
-            if l.side == "Buy" { "#22c55e" } else { "#ef4444" }
+    let current_price = status.current_price;
+
+    // Build levels HTML with current price marker
+    let mut levels_html = String::new();
+    let mut price_marker_inserted = false;
+
+    // Sort levels by price descending (highest first) for display
+    let mut sorted_levels = status.levels.clone();
+    sorted_levels.sort_by(|a, b| b.price.partial_cmp(&a.price).unwrap());
+
+    for l in &sorted_levels {
+        // Insert current price marker when we pass it
+        if !price_marker_inserted && l.price < current_price {
+            levels_html.push_str(&format!(
+                r#"<tr style="background: linear-gradient(90deg, #fbbf24 0%, #0f172a 100%);">
+                    <td colspan="4" style="text-align: center; font-weight: bold; color: #fbbf24; padding: 8px;">
+                        ▶ CURRENT PRICE: ${:.4} ◀
+                    </td>
+                </tr>"#,
+                current_price
+            ));
+            price_marker_inserted = true;
+        }
+
+        // Determine row styling based on side and order status
+        let (bg_color, text_color, icon) = if l.has_order {
+            if l.side == "Buy" {
+                ("rgba(34, 197, 94, 0.15)", "#22c55e", "🟢") // Green for active buy
+            } else {
+                ("rgba(239, 68, 68, 0.15)", "#ef4444", "🔴") // Red for active sell
+            }
         } else {
-            "#6b7280"
+            if l.side == "Buy" {
+                ("transparent", "#4ade80", "○") // Light green for empty buy
+            } else {
+                ("transparent", "#f87171", "○") // Light red for empty sell
+            }
         };
-        format!(
-            r#"<tr style="color: {}">
-                <td>{}</td>
-                <td>${:.4}</td>
-                <td>{}</td>
+
+        let status_badge = if l.has_order {
+            format!(r#"<span style="background: {}; padding: 2px 8px; border-radius: 4px; font-size: 11px;">ACTIVE</span>"#, 
+                if l.side == "Buy" { "#22c55e" } else { "#ef4444" })
+        } else {
+            format!(r#"<span style="color: #6b7280; font-size: 11px;">{}</span>"#, l.status)
+        };
+
+        levels_html.push_str(&format!(
+            r#"<tr style="background: {}; color: {};">
+                <td>{} {}</td>
+                <td style="font-family: monospace;">${:.4}</td>
+                <td><span style="font-weight: bold;">{}</span></td>
                 <td>{}</td>
             </tr>"#,
-            color, l.index, l.price, l.side, l.status
-        )
-    }).collect();
+            bg_color, text_color, icon, l.index, l.price, l.side, status_badge
+        ));
+    }
+
+    // If price is below all levels, add marker at bottom
+    if !price_marker_inserted {
+        levels_html.push_str(&format!(
+            r#"<tr style="background: linear-gradient(90deg, #fbbf24 0%, #0f172a 100%);">
+                <td colspan="4" style="text-align: center; font-weight: bold; color: #fbbf24; padding: 8px;">
+                    ▶ CURRENT PRICE: ${:.4} ◀
+                </td>
+            </tr>"#,
+            current_price
+        ));
+    }
 
     let html = format!(r##"
 <!DOCTYPE html>
@@ -586,15 +637,15 @@ async fn dashboard_handler(State(state): State<AppState>) -> Html<String> {
     <meta http-equiv="refresh" content="5">
     <style>
         * {{ margin: 0; padding: 0; box-sizing: border-box; }}
-        body {{ 
+        body {{
             font-family: 'SF Mono', 'Monaco', 'Consolas', monospace;
-            background: #0f172a; 
+            background: #0f172a;
             color: #e2e8f0;
             padding: 20px;
         }}
         .container {{ max-width: 1200px; margin: 0 auto; }}
-        h1 {{ 
-            color: #38bdf8; 
+        h1 {{
+            color: #38bdf8;
             font-size: 24px;
             margin-bottom: 20px;
             display: flex;
@@ -608,45 +659,45 @@ async fn dashboard_handler(State(state): State<AppState>) -> Html<String> {
             border-radius: 4px;
             font-size: 14px;
         }}
-        .grid {{ 
-            display: grid; 
-            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); 
+        .grid {{
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
             gap: 16px;
             margin-bottom: 24px;
         }}
-        .card {{ 
+        .card {{
             background: #1e293b;
             border-radius: 8px;
             padding: 16px;
             border: 1px solid #334155;
         }}
-        .card-title {{ 
+        .card-title {{
             color: #94a3b8;
             font-size: 12px;
             text-transform: uppercase;
             letter-spacing: 1px;
             margin-bottom: 8px;
         }}
-        .card-value {{ 
+        .card-value {{
             font-size: 24px;
             font-weight: bold;
             color: #f8fafc;
         }}
         .card-value.positive {{ color: #22c55e; }}
         .card-value.negative {{ color: #ef4444; }}
-        table {{ 
+        table {{
             width: 100%;
             border-collapse: collapse;
             font-size: 13px;
         }}
-        th {{ 
+        th {{
             text-align: left;
             padding: 12px 8px;
             color: #94a3b8;
             border-bottom: 1px solid #334155;
             font-weight: 500;
         }}
-        td {{ 
+        td {{
             padding: 8px;
             border-bottom: 1px solid #1e293b;
         }}
@@ -660,10 +711,10 @@ async fn dashboard_handler(State(state): State<AppState>) -> Html<String> {
 <body>
     <div class="container">
         <h1>
-            📊 Grid Bot 
+            📊 Grid Bot
             <span class="status-badge">{status}</span>
         </h1>
-        
+
         <div class="grid">
             <div class="card">
                 <div class="card-title">Asset</div>
@@ -748,7 +799,7 @@ async fn dashboard_handler(State(state): State<AppState>) -> Html<String> {
         levels_html = levels_html,
         last_updated = status.last_updated,
     );
-    
+
     Html(html)
 }
 
