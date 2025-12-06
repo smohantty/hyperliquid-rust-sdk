@@ -430,7 +430,9 @@ impl GridBot {
 
         let mut placed = 0;
         for order in init_pos.grid_orders {
-            match self.place_order(order.price, order.size, order.side == OrderSide::Buy).await {
+            info!("place_initial_orders: level={}, side={:?}, price={}, size={}",
+                   order.level_index, order.side, order.price, order.size);
+            match self.place_order(order.price, order.size, order.side == OrderSide::Buy, Some(order.level_index)).await {
                 Ok(oid) => {
                     placed += 1;
                     self.state_manager.update(|state| {
@@ -451,13 +453,23 @@ impl GridBot {
         Ok(())
     }
 
-    async fn place_order(&self, price: f64, size: f64, is_buy: bool) -> Result<u64, String> {
+    async fn place_order(&self, price: f64, size: f64, is_buy: bool, level_index: Option<u32>) -> Result<u64, String> {
+        // Always round price and size before sending to exchange
+        // This ensures compliance with Hyperliquid's tick/lot size rules
+        // For limit orders: buys round down (false), sells round up (true)
+        let rounded_price = self.precision.round_price(price, !is_buy);
+        let rounded_size = self.precision.round_size(size);
+
+        let level_info = level_index.map(|idx| format!("level={} ", idx)).unwrap_or_default();
+        debug!("place_order: {}price={} -> {}, size={} -> {} (is_buy={})",
+               level_info, price, rounded_price, size, rounded_size, is_buy);
+
         let order = ClientOrderRequest {
             asset: self.asset_key.clone(),
             is_buy,
             reduce_only: false,
-            limit_px: price,
-            sz: size,
+            limit_px: rounded_price,
+            sz: rounded_size,
             cloid: None,
             order_type: ClientOrder::Limit(ClientLimit { tif: "Gtc".to_string() }),
         };
@@ -552,7 +564,7 @@ impl GridBot {
             let size = self.config.calculate_order_size_at_price(price, &self.precision);
             info!("Placing replacement {} @ {} size {}", if new_is_buy { "BUY" } else { "SELL" }, price, size);
 
-            match self.place_order(price, size, new_is_buy).await {
+            match self.place_order(price, size, new_is_buy, Some(adj_idx)).await {
                 Ok(new_oid) => {
                     self.state_manager.update(|state| {
                         state.register_order(adj_idx, new_oid);

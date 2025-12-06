@@ -1,6 +1,7 @@
 //! Grid trading configuration
 
 use chrono::Utc;
+use log::debug;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -87,53 +88,26 @@ impl AssetPrecision {
     }
 
     /// Round a price to the correct precision using truncate_float
-    /// 
+    ///
     /// Enforces Hyperliquid's tick size rules:
     /// - Max 5 significant figures
     /// - Max price_decimals decimal places (MAX_DECIMALS - szDecimals)
-    /// 
-    /// Uses truncate_float for the rounding operation.
+    ///
+    /// Reference: https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/tick-and-lot-size
     pub fn round_price(&self, price: f64, round_up: bool) -> f64 {
-        // Integer prices are always allowed
-        if price.fract() == 0.0 {
-            return price;
-        }
-
-        let abs_price = price.abs();
-
-        // Calculate decimal places needed for 5 significant figures
-        let first_digit_pos = if abs_price >= 1.0 {
-            abs_price.log10().floor() as i32
-        } else {
-            abs_price.log10().ceil() as i32 - 1
-        };
-
-        // For 5 sig figs: need positions first_digit_pos down to (first_digit_pos - 4)
-        let decimals_for_5_sig = if first_digit_pos >= 0 {
-            (4i32 - first_digit_pos).max(0) as u32
-        } else {
-            (-first_digit_pos + 4) as u32
-        };
-
-        // Use minimum of sig figs constraint and max decimals constraint
-        let decimals = decimals_for_5_sig.min(self.price_decimals);
-
-        // For proper rounding (not just truncation), check next digit
-        let should_round_up = if round_up {
-            true
-        } else {
-            // Check digit after target decimals for round-to-nearest
-            let multiplier = 10f64.powi(decimals as i32 + 1);
-            let next_digit = ((abs_price * multiplier) as u64) % 10;
-            next_digit >= 5
-        };
-
-        truncate_float(price, decimals, should_round_up)
+        debug!("round_price: input={}, price_decimals={}, round_up={}",
+               price, self.price_decimals, round_up);
+        let result = truncate_float(price, self.price_decimals, round_up);
+        debug!("round_price: output={} (from input={})", result, price);
+        result
     }
 
     /// Round a size to the correct precision
     pub fn round_size(&self, size: f64) -> f64 {
-        truncate_float(size, self.sz_decimals, false)
+        debug!("round_size: input={}, sz_decimals={}", size, self.sz_decimals);
+        let result = truncate_float(size, self.sz_decimals, false);
+        debug!("round_size: output={} (from input={})", result, size);
+        result
     }
 }
 
@@ -564,28 +538,89 @@ mod tests {
     fn test_price_rounding_hyperliquid_rules() {
         // Test with spot asset: szDecimals=2, price_decimals=6
         let precision = AssetPrecision::for_spot(2);
+        assert_eq!(precision.price_decimals, 6);
+        assert_eq!(precision.sz_decimals, 2);
 
-        // Test cases - should round to correct decimals and 5 sig figs
-        // 15.21732 -> should become 15.217 (3 decimals for 5 sig figs)
+        // Should truncate to 6 decimal places
         let price1 = precision.round_price(15.21732, false);
-        assert!((price1 - 15.217).abs() < 0.0001);
-
-        // 15.43779 -> should become 15.438 (3 decimals, rounds up)
-        let price2 = precision.round_price(15.43779, false);
-        assert!((price2 - 15.438).abs() < 0.0001);
-
-        // 17.320508 -> should become 17.321 (3 decimals for 5 sig figs)
-        let price3 = precision.round_price(17.320508, false);
-        assert!((price3 - 17.321).abs() < 0.0001);
-
-        // Integer prices should pass through unchanged
-        let price4 = precision.round_price(15.0, false);
-        assert!((price4 - 15.0).abs() < 0.0001);
+        assert!((price1 - 15.217320).abs() < 0.0000001,
+                "Expected 15.217320, got {}", price1);
 
         // Test with perp: szDecimals=1, price_decimals=5
         let perp_precision = AssetPrecision::for_perp(1);
-        // 1234.56 -> should become 1234.6 (1 decimal for 5 sig figs, rounds up)
+        assert_eq!(perp_precision.price_decimals, 5);
+        assert_eq!(perp_precision.sz_decimals, 1);
+
+        // Should truncate to 5 decimal places
         let perp_price = perp_precision.round_price(1234.56, false);
-        assert!((perp_price - 1234.6).abs() < 0.01);
+        assert!((perp_price - 1234.56000).abs() < 0.00001,
+                "Expected 1234.56000, got {}", perp_price);
+    }
+
+    #[test]
+    fn test_price_rounding_with_actual_failing_prices() {
+        // Test with spot asset: szDecimals=2, price_decimals=6 (like HYPE/USDC)
+        let precision = AssetPrecision::for_spot(2);
+
+        // These are the actual prices that failed in the bot
+        let test_cases = vec![
+            (15.0, 15.0, "integer price"),
+            (15.21732, 15.217320, "15.21732 -> 6 decimals"),
+            (15.43779, 15.437790, "15.43779 -> 6 decimals"),
+            (15.661453, 15.661453, "15.661453 -> 6 decimals (already 6)"),
+            (15.888357, 15.888357, "15.888357 -> 6 decimals (already 6)"),
+            (16.118548, 16.118548, "16.118548 -> 6 decimals (already 6)"),
+            (16.352075, 16.352075, "16.352075 -> 6 decimals (already 6)"),
+            (16.588985, 16.588985, "16.588985 -> 6 decimals (already 6)"),
+            (16.829327, 16.829327, "16.829327 -> 6 decimals (already 6)"),
+            (17.073151, 17.073151, "17.073151 -> 6 decimals (already 6)"),
+            (17.320508, 17.320508, "17.320508 -> 6 decimals (already 6)"),
+            (17.571448, 17.571448, "17.571448 -> 6 decimals (already 6)"),
+            (18.084288, 18.084288, "18.084288 -> 6 decimals (already 6)"),
+            (18.346295, 18.346295, "18.346295 -> 6 decimals (already 6)"),
+            (18.612097, 18.612097, "18.612097 -> 6 decimals (already 6)"),
+            (18.88175, 18.881750, "18.88175 -> 6 decimals"),
+        ];
+
+        for (input, expected, description) in test_cases {
+            let rounded = precision.round_price(input, false);
+            assert!((rounded - expected).abs() < 0.000001,
+                    "{}: Expected {}, got {}", description, expected, rounded);
+        }
+    }
+
+    #[test]
+    fn test_size_rounding() {
+        // Test with spot asset: szDecimals=2
+        let precision = AssetPrecision::for_spot(2);
+
+        let test_cases = vec![
+            (1.0, 1.0, "integer size"),
+            (1.234567, 1.23, "1.234567 -> 2 decimals"),
+            (10.999, 10.99, "10.999 -> 2 decimals (truncate)"),
+            (0.123456, 0.12, "0.123456 -> 2 decimals"),
+        ];
+
+        for (input, expected, description) in test_cases {
+            let rounded = precision.round_size(input);
+            assert!((rounded - expected).abs() < 0.01,
+                    "{}: Expected {}, got {}", description, expected, rounded);
+        }
+    }
+
+    #[test]
+    fn test_round_price_round_up_flag() {
+        let precision = AssetPrecision::for_spot(2);
+
+        // Test round_up=false (round down/truncate)
+        let rounded_down = precision.round_price(15.217329, false);
+        assert!((rounded_down - 15.217329).abs() < 0.000001);
+
+        // Test round_up=true
+        let rounded_up = precision.round_price(15.217329, true);
+        // truncate_float with round_up=true adds 1 to the last digit
+        // 15.217329 * 10^6 = 15217329, +1 = 15217330, / 10^6 = 15.217330
+        assert!((rounded_up - 15.217330).abs() < 0.000001,
+                "Expected 15.217330, got {}", rounded_up);
     }
 }
