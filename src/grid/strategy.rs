@@ -1,7 +1,5 @@
 //! Grid strategy - handles grid level calculation and fill processing
 
-use serde::{Deserialize, Serialize};
-
 use super::config::{AssetPrecision, GridConfig, GridMode};
 use super::types::{GridFill, GridLevel, GridOrderRequest, LevelStatus, OrderSide};
 
