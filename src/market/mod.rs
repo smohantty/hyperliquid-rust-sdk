@@ -20,7 +20,9 @@
 //! - **M10**: `current_price` - Query last known price
 //! - **M11**: `order_status` - Query order status
 //!
-//! # Example
+//! # Examples
+//!
+//! ## Basic Market (in-memory)
 //!
 //! ```rust
 //! use hyperliquid_rust_sdk::market::{Market, MarketListener, OrderRequest, OrderFill, NoOpListener};
@@ -40,11 +42,31 @@
 //!     println!("Order status: {:?}", status);
 //! }
 //! ```
+//!
+//! ## Hyperliquid Market (live exchange)
+//!
+//! ```ignore
+//! use hyperliquid_rust_sdk::market::{HyperliquidMarket, HyperliquidMarketInput, NoOpListener};
+//! use hyperliquid_rust_sdk::BaseUrl;
+//!
+//! let input = HyperliquidMarketInput {
+//!     asset: "BTC".to_string(),
+//!     wallet: wallet,
+//!     base_url: Some(BaseUrl::Testnet),
+//! };
+//!
+//! let mut market = HyperliquidMarket::new(input, NoOpListener).await?;
+//!
+//! // Start the event loop (runs indefinitely)
+//! market.start().await;
+//! ```
 
+mod hyperliquid_market;
 mod listener;
 mod market;
 mod types;
 
+pub use hyperliquid_market::{HyperliquidMarket, HyperliquidMarketInput};
 pub use listener::{MarketListener, NoOpListener};
 pub use market::Market;
 pub use types::{OrderFill, OrderRequest, OrderStatus};
