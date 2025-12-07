@@ -69,18 +69,15 @@
 //! market.start().await;
 //! ```
 //!
-//! ## Paper Trading Market (simulated fills with live prices)
+//! ## Paper Trading Market (simulated fills with live Mainnet prices)
 //!
 //! ```ignore
 //! use hyperliquid_rust_sdk::market::{
 //!     PaperTradingMarket, PaperTradingMarketInput, OrderRequest, OrderSide, NoOpListener
 //! };
-//! use hyperliquid_rust_sdk::BaseUrl;
 //!
 //! let input = PaperTradingMarketInput {
 //!     initial_balance: 10_000.0,
-//!     base_url: Some(BaseUrl::Mainnet),
-//!     wallet: None,
 //! };
 //!
 //! let mut market = PaperTradingMarket::new(input, NoOpListener).await?;

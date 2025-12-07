@@ -5,7 +5,6 @@
 
 use std::collections::HashMap;
 
-use alloy::signers::local::PrivateKeySigner;
 use log::{error, info};
 use tokio::sync::mpsc::unbounded_channel;
 
@@ -25,18 +24,12 @@ pub enum OrderSide {
 pub struct PaperTradingMarketInput {
     /// Initial balance in quote currency (e.g., USDC)
     pub initial_balance: f64,
-    /// Base URL (Mainnet or Testnet) for price feeds
-    pub base_url: Option<BaseUrl>,
-    /// Optional wallet for authenticated subscriptions (not required for paper trading)
-    pub wallet: Option<PrivateKeySigner>,
 }
 
 impl Default for PaperTradingMarketInput {
     fn default() -> Self {
         Self {
             initial_balance: 100_000.0,
-            base_url: Some(BaseUrl::Mainnet),
-            wallet: None,
         }
     }
 }
@@ -226,12 +219,14 @@ pub struct PaperTradingMarket<L: MarketListener> {
 impl<L: MarketListener> PaperTradingMarket<L> {
     /// Create a new PaperTradingMarket
     ///
+    /// Always connects to Mainnet for live price feeds.
+    ///
     /// # Arguments
     /// * `input` - Configuration for the paper trading market
     /// * `listener` - Listener to receive notifications
     pub async fn new(input: PaperTradingMarketInput, listener: L) -> Result<Self, crate::Error> {
-        let base_url = input.base_url.unwrap_or(BaseUrl::Mainnet);
-        let info_client = InfoClient::new(None, Some(base_url)).await?;
+        // Paper trading always uses Mainnet for real price data
+        let info_client = InfoClient::new(None, Some(BaseUrl::Mainnet)).await?;
 
         Ok(Self {
             listener,
