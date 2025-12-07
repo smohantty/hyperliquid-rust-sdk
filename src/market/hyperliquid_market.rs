@@ -319,13 +319,13 @@ impl<L: MarketListener> HyperliquidMarket<L> {
                                         order.qty,
                                         order.limit_price,
                                     );
-                                    
+
                                     // Store order before notifying
                                     self.orders_by_internal_id.insert(internal_id, tracked_order);
-                                    
+
                                     // M6: Synchronous notification
                                     self.listener.on_order_filled(fill);
-                                    
+
                                     return internal_id;
                                 }
                                 ExchangeDataStatus::Resting(resting) => {
