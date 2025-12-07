@@ -29,12 +29,9 @@ pub struct HyperliquidMarketInput {
 /// Internal order tracking for Hyperliquid
 #[derive(Debug, Clone)]
 struct TrackedOrder {
-    /// Our internal order ID
-    #[allow(dead_code)]
-    internal_id: u64,
-    /// Exchange order ID (oid)
+    /// Exchange order ID (oid) - internal to Hyperliquid
     exchange_oid: Option<u64>,
-    /// Original request
+    /// Original request (contains user's order_id)
     request: OrderRequest,
     /// Current status
     status: OrderStatus,
@@ -45,9 +42,8 @@ struct TrackedOrder {
 }
 
 impl TrackedOrder {
-    fn new(internal_id: u64, request: OrderRequest) -> Self {
+    fn new(request: OrderRequest) -> Self {
         Self {
-            internal_id,
             exchange_oid: None,
             request,
             status: OrderStatus::Pending,
@@ -105,12 +101,10 @@ pub struct HyperliquidMarket<L: MarketListener> {
     pub user_address: Address,
     /// Current prices by asset
     prices: HashMap<String, f64>,
-    /// Orders by internal ID
-    orders_by_internal_id: HashMap<u64, TrackedOrder>,
-    /// Orders by exchange OID
-    orders_by_exchange_oid: HashMap<u64, u64>, // exchange_oid -> internal_id
-    /// Next internal order ID
-    next_order_id: u64,
+    /// Orders by user-provided order_id
+    orders: HashMap<u64, TrackedOrder>,
+    /// Maps exchange OID to user's order_id
+    exchange_oid_to_order_id: HashMap<u64, u64>,
 }
 
 impl<L: MarketListener> HyperliquidMarket<L> {
@@ -137,9 +131,8 @@ impl<L: MarketListener> HyperliquidMarket<L> {
             exchange_client,
             user_address,
             prices: HashMap::new(),
-            orders_by_internal_id: HashMap::new(),
-            orders_by_exchange_oid: HashMap::new(),
-            next_order_id: 1,
+            orders: HashMap::new(),
+            exchange_oid_to_order_id: HashMap::new(),
         })
     }
 
@@ -217,8 +210,8 @@ impl<L: MarketListener> HyperliquidMarket<L> {
                         );
 
                         // Find order by exchange OID and update
-                        if let Some(&internal_id) = self.orders_by_exchange_oid.get(&oid) {
-                            if let Some(order) = self.orders_by_internal_id.get_mut(&internal_id) {
+                        if let Some(&user_order_id) = self.exchange_oid_to_order_id.get(&oid) {
+                            if let Some(order) = self.orders.get_mut(&user_order_id) {
                                 let was_active = order.status.is_active();
                                 order.fill(qty, price);
 
@@ -231,7 +224,7 @@ impl<L: MarketListener> HyperliquidMarket<L> {
                                 // Only notify when order is fully filled (M3)
                                 if was_active && matches!(order.status, OrderStatus::Filled(_)) {
                                     let order_fill = OrderFill::new(
-                                        internal_id,
+                                        user_order_id,          // User's order_id
                                         &fill.coin,
                                         order.request.qty,      // Total order qty
                                         order.avg_fill_price,   // Average fill price
@@ -239,7 +232,7 @@ impl<L: MarketListener> HyperliquidMarket<L> {
 
                                     info!(
                                         "Order {} fully filled: {} {} at avg price {}",
-                                        internal_id, order.request.qty, fill.coin, order.avg_fill_price
+                                        user_order_id, order.request.qty, fill.coin, order.avg_fill_price
                                     );
 
                                     // M6: Synchronous notification
@@ -276,15 +269,10 @@ impl<L: MarketListener> HyperliquidMarket<L> {
     /// Place a new order on Hyperliquid (M8)
     ///
     /// # Arguments
-    /// * `order` - The order request
-    ///
-    /// # Returns
-    /// A unique internal order ID
-    pub async fn place_order(&mut self, order: OrderRequest) -> u64 {
-        let internal_id = self.next_order_id;
-        self.next_order_id += 1;
-
-        let mut tracked_order = TrackedOrder::new(internal_id, order.clone());
+    /// * `order` - The order request (contains user-provided order_id)
+    pub async fn place_order(&mut self, order: OrderRequest) {
+        let user_order_id = order.order_id;
+        let mut tracked_order = TrackedOrder::new(order.clone());
 
         // Determine if buy or sell based on limit price vs current price
         // For simplicity: if limit_price >= current_price, it's a buy
@@ -316,57 +304,56 @@ impl<L: MarketListener> HyperliquidMarket<L> {
                                 ExchangeDataStatus::Filled(filled) => {
                                     tracked_order.exchange_oid = Some(filled.oid);
                                     tracked_order.status = OrderStatus::Filled(order.limit_price);
-                                    self.orders_by_exchange_oid.insert(filled.oid, internal_id);
+                                    self.exchange_oid_to_order_id.insert(filled.oid, user_order_id);
 
-                                    info!("Order {} filled immediately, oid={}", internal_id, filled.oid);
+                                    info!("Order {} filled immediately, oid={}", user_order_id, filled.oid);
 
-                                    // Create fill notification
+                                    // Create fill notification with user's order_id
                                     let fill = OrderFill::new(
-                                        internal_id,
+                                        user_order_id,
                                         &order.asset,
                                         order.qty,
                                         order.limit_price,
                                     );
 
                                     // Store order before notifying
-                                    self.orders_by_internal_id.insert(internal_id, tracked_order);
+                                    self.orders.insert(user_order_id, tracked_order);
 
                                     // M6: Synchronous notification
                                     self.listener.on_order_filled(fill);
 
-                                    return internal_id;
+                                    return;
                                 }
                                 ExchangeDataStatus::Resting(resting) => {
                                     tracked_order.exchange_oid = Some(resting.oid);
                                     tracked_order.status = OrderStatus::Pending;
-                                    self.orders_by_exchange_oid.insert(resting.oid, internal_id);
+                                    self.exchange_oid_to_order_id.insert(resting.oid, user_order_id);
 
-                                    info!("Order {} resting, oid={}", internal_id, resting.oid);
+                                    info!("Order {} resting, oid={}", user_order_id, resting.oid);
                                 }
                                 ExchangeDataStatus::Error(e) => {
-                                    error!("Order {} error: {}", internal_id, e);
+                                    error!("Order {} error: {}", user_order_id, e);
                                     tracked_order.status = OrderStatus::Cancelled;
                                 }
                                 _ => {
-                                    debug!("Order {} unknown status", internal_id);
+                                    debug!("Order {} unknown status", user_order_id);
                                 }
                             }
                         }
                     }
                 }
                 ExchangeResponseStatus::Err(e) => {
-                    error!("Order {} exchange error: {}", internal_id, e);
+                    error!("Order {} exchange error: {}", user_order_id, e);
                     tracked_order.status = OrderStatus::Cancelled;
                 }
             },
             Err(e) => {
-                error!("Order {} request error: {}", internal_id, e);
+                error!("Order {} request error: {}", user_order_id, e);
                 tracked_order.status = OrderStatus::Cancelled;
             }
         }
 
-        self.orders_by_internal_id.insert(internal_id, tracked_order);
-        internal_id
+        self.orders.insert(user_order_id, tracked_order);
     }
 
     /// Inject an external fill (M9)
@@ -375,10 +362,10 @@ impl<L: MarketListener> HyperliquidMarket<L> {
     /// Only notifies the listener when the order is fully filled.
     ///
     /// # Arguments
-    /// * `fill` - The fill details
+    /// * `fill` - The fill details (order_id is user-provided)
     pub fn execute_fill(&mut self, fill: OrderFill) {
         // Update order state if it exists
-        if let Some(order) = self.orders_by_internal_id.get_mut(&fill.order_id) {
+        if let Some(order) = self.orders.get_mut(&fill.order_id) {
             let was_active = order.status.is_active();
             order.fill(fill.qty, fill.price);
 
@@ -411,12 +398,12 @@ impl<L: MarketListener> HyperliquidMarket<L> {
     /// Query order status (M11)
     ///
     /// # Arguments
-    /// * `order_id` - The internal order identifier
+    /// * `order_id` - The user-provided order identifier
     ///
     /// # Returns
     /// The current order status if the order exists
     pub fn order_status(&self, order_id: u64) -> Option<OrderStatus> {
-        self.orders_by_internal_id.get(&order_id).map(|o| o.status)
+        self.orders.get(&order_id).map(|o| o.status)
     }
 
     /// Get a reference to the listener
@@ -432,12 +419,12 @@ impl<L: MarketListener> HyperliquidMarket<L> {
     /// Cancel an order
     ///
     /// # Arguments
-    /// * `order_id` - The internal order ID to cancel
+    /// * `order_id` - The user-provided order ID to cancel
     ///
     /// # Returns
     /// `true` if the order was cancelled successfully
     pub async fn cancel_order(&mut self, order_id: u64) -> bool {
-        let Some(order) = self.orders_by_internal_id.get(&order_id) else {
+        let Some(order) = self.orders.get(&order_id) else {
             return false;
         };
 
@@ -447,7 +434,7 @@ impl<L: MarketListener> HyperliquidMarket<L> {
 
         let Some(exchange_oid) = order.exchange_oid else {
             // Order not yet on exchange
-            if let Some(order) = self.orders_by_internal_id.get_mut(&order_id) {
+            if let Some(order) = self.orders.get_mut(&order_id) {
                 order.status = OrderStatus::Cancelled;
             }
             return true;
@@ -465,7 +452,7 @@ impl<L: MarketListener> HyperliquidMarket<L> {
                         if !data.statuses.is_empty() {
                             match &data.statuses[0] {
                                 ExchangeDataStatus::Success => {
-                                    if let Some(order) = self.orders_by_internal_id.get_mut(&order_id) {
+                                    if let Some(order) = self.orders.get_mut(&order_id) {
                                         order.status = OrderStatus::Cancelled;
                                     }
                                     info!("Order {} cancelled", order_id);
@@ -491,11 +478,9 @@ impl<L: MarketListener> HyperliquidMarket<L> {
         false
     }
 
-    /// Get the exchange OID for an internal order ID
+    /// Get the exchange OID for a user-provided order ID
     pub fn get_exchange_oid(&self, order_id: u64) -> Option<u64> {
-        self.orders_by_internal_id
-            .get(&order_id)
-            .and_then(|o| o.exchange_oid)
+        self.orders.get(&order_id).and_then(|o| o.exchange_oid)
     }
 
     /// Get all current prices
@@ -513,8 +498,8 @@ mod tests {
 
     #[test]
     fn test_tracked_order_fill() {
-        let request = OrderRequest::new("BTC", 2.0, 50000.0);
-        let mut order = TrackedOrder::new(1, request);
+        let request = OrderRequest::new(100, "BTC", 2.0, 50000.0);
+        let mut order = TrackedOrder::new(request);
 
         assert_eq!(order.status, OrderStatus::Pending);
 
@@ -535,8 +520,9 @@ mod tests {
 
     #[test]
     fn test_order_request_validation() {
-        let order = OrderRequest::new("ETH", 1.5, 3000.0);
+        let order = OrderRequest::new(200, "ETH", 1.5, 3000.0);
         assert!(order.is_valid());
+        assert_eq!(order.order_id, 200);
         assert_eq!(order.asset, "ETH");
         assert_eq!(order.qty, 1.5);
         assert_eq!(order.limit_price, 3000.0);

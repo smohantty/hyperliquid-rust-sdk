@@ -5,8 +5,12 @@ use serde::{Deserialize, Serialize};
 /// Order request input to the Market
 ///
 /// Represents a new order to be placed in the market.
+/// The user provides their own `order_id` which will be returned
+/// in the fill callback when the order is executed.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OrderRequest {
+    /// User-provided order identifier (returned in fill callback)
+    pub order_id: u64,
     /// Asset identifier (e.g., "BTC", "ETH")
     pub asset: String,
     /// Order quantity (must be > 0)
@@ -18,12 +22,19 @@ pub struct OrderRequest {
 impl OrderRequest {
     /// Create a new order request
     ///
+    /// # Arguments
+    /// * `order_id` - User-provided identifier (returned in fill callback)
+    /// * `asset` - Asset to trade
+    /// * `qty` - Order quantity (must be > 0)
+    /// * `limit_price` - Limit price (must be > 0)
+    ///
     /// # Panics
     /// Panics if qty <= 0 or limit_price <= 0
-    pub fn new(asset: impl Into<String>, qty: f64, limit_price: f64) -> Self {
+    pub fn new(order_id: u64, asset: impl Into<String>, qty: f64, limit_price: f64) -> Self {
         assert!(qty > 0.0, "qty must be greater than 0");
         assert!(limit_price > 0.0, "limit_price must be greater than 0");
         Self {
+            order_id,
             asset: asset.into(),
             qty,
             limit_price,
@@ -39,9 +50,10 @@ impl OrderRequest {
 /// Order fill notification from Market to Listener
 ///
 /// Contains details about an executed order fill.
+/// The `order_id` matches the user-provided ID from the original `OrderRequest`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OrderFill {
-    /// Unique order identifier assigned by the market
+    /// User-provided order identifier (same as in OrderRequest)
     pub order_id: u64,
     /// Asset identifier
     pub asset: String,
@@ -110,7 +122,8 @@ mod tests {
 
     #[test]
     fn test_order_request_new() {
-        let order = OrderRequest::new("BTC", 1.5, 50000.0);
+        let order = OrderRequest::new(100, "BTC", 1.5, 50000.0);
+        assert_eq!(order.order_id, 100);
         assert_eq!(order.asset, "BTC");
         assert_eq!(order.qty, 1.5);
         assert_eq!(order.limit_price, 50000.0);
@@ -120,13 +133,13 @@ mod tests {
     #[test]
     #[should_panic(expected = "qty must be greater than 0")]
     fn test_order_request_invalid_qty() {
-        OrderRequest::new("BTC", 0.0, 50000.0);
+        OrderRequest::new(1, "BTC", 0.0, 50000.0);
     }
 
     #[test]
     #[should_panic(expected = "limit_price must be greater than 0")]
     fn test_order_request_invalid_price() {
-        OrderRequest::new("BTC", 1.0, 0.0);
+        OrderRequest::new(1, "BTC", 1.0, 0.0);
     }
 
     #[test]

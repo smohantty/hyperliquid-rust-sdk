@@ -29,7 +29,7 @@ impl InternalOrder {
 ///
 /// # Requirements Implemented
 /// - M1: Price Management - update and retrieve prices
-/// - M2: Order Acceptance - accept orders and return unique IDs
+/// - M2: Order Acceptance - accept orders with user-provided IDs
 /// - M3: Order Execution Notification - notify listener on fills
 /// - M4: Price Update Notification - notify listener on price changes
 /// - M5: Listener Ownership - owns a single listener instance
@@ -39,10 +39,8 @@ pub struct Market<L: MarketListener> {
     listener: L,
     /// Current prices by asset
     prices: HashMap<String, f64>,
-    /// Order storage
+    /// Order storage (keyed by user-provided order_id)
     orders: HashMap<u64, InternalOrder>,
-    /// Next order ID to assign
-    next_order_id: u64,
 }
 
 impl<L: MarketListener> Market<L> {
@@ -55,7 +53,6 @@ impl<L: MarketListener> Market<L> {
             listener,
             prices: HashMap::new(),
             orders: HashMap::new(),
-            next_order_id: 1,
         }
     }
 
@@ -74,21 +71,15 @@ impl<L: MarketListener> Market<L> {
 
     /// Place a new order (M8)
     ///
-    /// Accepts an order request, assigns a unique order ID, and stores it as pending.
+    /// Accepts an order request with a user-provided order_id and stores it as pending.
     /// Fill logic is not handled here - use `execute_fill` to process fills.
     ///
     /// # Arguments
-    /// * `order` - The order request
-    ///
-    /// # Returns
-    /// A unique order ID
-    pub fn place_order(&mut self, order: OrderRequest) -> u64 {
-        let order_id = self.next_order_id;
-        self.next_order_id += 1;
-
+    /// * `order` - The order request (contains user-provided order_id)
+    pub fn place_order(&mut self, order: OrderRequest) {
+        let order_id = order.order_id;
         let internal_order = InternalOrder::new(order);
         self.orders.insert(order_id, internal_order);
-        order_id
     }
 
     /// Mark order as filled and notify listener (M9)
@@ -207,12 +198,11 @@ mod tests {
     fn test_place_order_pending_m8() {
         let mut market = Market::new(RecordingListener::default());
 
-        // Orders are always placed as pending - fill logic is external
-        let order = OrderRequest::new("BTC", 1.0, 50000.0);
-        let order_id = market.place_order(order);
+        // User provides order_id, orders are always placed as pending
+        let order = OrderRequest::new(100, "BTC", 1.0, 50000.0);
+        market.place_order(order);
 
-        assert_eq!(order_id, 1);
-        assert_eq!(market.order_status(order_id), Some(OrderStatus::Pending));
+        assert_eq!(market.order_status(100), Some(OrderStatus::Pending));
         assert!(market.listener().fills.is_empty());
     }
 
@@ -224,11 +214,11 @@ mod tests {
         // Fill logic is handled by concrete implementations
         market.update_price("BTC", 49000.0);
 
-        let order = OrderRequest::new("BTC", 1.0, 50000.0);
-        let order_id = market.place_order(order);
+        let order = OrderRequest::new(200, "BTC", 1.0, 50000.0);
+        market.place_order(order);
 
         // Order should be pending - no automatic fill
-        assert_eq!(market.order_status(order_id), Some(OrderStatus::Pending));
+        assert_eq!(market.order_status(200), Some(OrderStatus::Pending));
         assert!(market.listener().fills.is_empty());
     }
 
@@ -236,22 +226,22 @@ mod tests {
     fn test_execute_fill_m9() {
         let mut market = Market::new(RecordingListener::default());
 
-        let order = OrderRequest::new("BTC", 1.0, 50000.0);
-        let order_id = market.place_order(order);
+        let order = OrderRequest::new(300, "BTC", 1.0, 50000.0);
+        market.place_order(order);
 
-        // Execute fill - marks as filled and notifies
-        let fill = OrderFill::new(order_id, "BTC", 1.0, 49500.0);
+        // Execute fill - marks as filled and notifies with same order_id
+        let fill = OrderFill::new(300, "BTC", 1.0, 49500.0);
         market.execute_fill(fill);
 
         // Order should be filled at the provided price
         assert_eq!(
-            market.order_status(order_id),
+            market.order_status(300),
             Some(OrderStatus::Filled(49500.0))
         );
 
-        // Listener was notified
+        // Listener was notified with user's order_id
         assert_eq!(market.listener().fills.len(), 1);
-        assert_eq!(market.listener().fills[0].order_id, order_id);
+        assert_eq!(market.listener().fills[0].order_id, 300);
         assert_eq!(market.listener().fills[0].qty, 1.0);
         assert_eq!(market.listener().fills[0].price, 49500.0);
     }
@@ -260,22 +250,22 @@ mod tests {
     fn test_execute_fill_already_filled_m9() {
         let mut market = Market::new(RecordingListener::default());
 
-        let order = OrderRequest::new("BTC", 1.0, 50000.0);
-        let order_id = market.place_order(order);
+        let order = OrderRequest::new(400, "BTC", 1.0, 50000.0);
+        market.place_order(order);
 
         // First fill
-        let fill1 = OrderFill::new(order_id, "BTC", 1.0, 49500.0);
+        let fill1 = OrderFill::new(400, "BTC", 1.0, 49500.0);
         market.execute_fill(fill1);
         assert_eq!(market.listener().fills.len(), 1);
 
         // Second fill on same order - should be ignored (already filled)
-        let fill2 = OrderFill::new(order_id, "BTC", 1.0, 49000.0);
+        let fill2 = OrderFill::new(400, "BTC", 1.0, 49000.0);
         market.execute_fill(fill2);
 
         // Still only one notification, status unchanged
         assert_eq!(market.listener().fills.len(), 1);
         assert_eq!(
-            market.order_status(order_id),
+            market.order_status(400),
             Some(OrderStatus::Filled(49500.0))
         );
     }
@@ -303,37 +293,39 @@ mod tests {
 
         assert!(market.order_status(999).is_none());
 
-        let order = OrderRequest::new("BTC", 1.0, 50000.0);
-        let order_id = market.place_order(order);
+        let order = OrderRequest::new(500, "BTC", 1.0, 50000.0);
+        market.place_order(order);
 
-        assert!(market.order_status(order_id).is_some());
+        assert!(market.order_status(500).is_some());
     }
 
     #[test]
     fn test_cancel_order() {
         let mut market = Market::new(NoOpListener);
 
-        let order = OrderRequest::new("BTC", 1.0, 50000.0);
-        let order_id = market.place_order(order);
+        let order = OrderRequest::new(600, "BTC", 1.0, 50000.0);
+        market.place_order(order);
 
-        assert!(market.cancel_order(order_id));
-        assert_eq!(market.order_status(order_id), Some(OrderStatus::Cancelled));
+        assert!(market.cancel_order(600));
+        assert_eq!(market.order_status(600), Some(OrderStatus::Cancelled));
 
         // Cannot cancel already cancelled order
-        assert!(!market.cancel_order(order_id));
+        assert!(!market.cancel_order(600));
     }
 
     #[test]
-    fn test_unique_order_ids() {
+    fn test_user_provided_order_ids() {
         let mut market = Market::new(NoOpListener);
 
-        let id1 = market.place_order(OrderRequest::new("BTC", 1.0, 50000.0));
-        let id2 = market.place_order(OrderRequest::new("BTC", 1.0, 50000.0));
-        let id3 = market.place_order(OrderRequest::new("ETH", 1.0, 3000.0));
+        // User provides their own order IDs
+        market.place_order(OrderRequest::new(1001, "BTC", 1.0, 50000.0));
+        market.place_order(OrderRequest::new(1002, "BTC", 1.0, 50000.0));
+        market.place_order(OrderRequest::new(2001, "ETH", 1.0, 3000.0));
 
-        assert_ne!(id1, id2);
-        assert_ne!(id2, id3);
-        assert_ne!(id1, id3);
+        assert!(market.order_status(1001).is_some());
+        assert!(market.order_status(1002).is_some());
+        assert!(market.order_status(2001).is_some());
+        assert!(market.order_status(9999).is_none());
     }
 
     #[test]
@@ -347,15 +339,16 @@ mod tests {
         assert_eq!(market.listener().price_updates.len(), 1);
 
         // Place order and fill it via execute_fill
-        let order = OrderRequest::new("BTC", 1.0, 50000.0);
-        let order_id = market.place_order(order);
+        let order = OrderRequest::new(700, "BTC", 1.0, 50000.0);
+        market.place_order(order);
 
         // Execute a complete fill
-        let fill = OrderFill::new(order_id, "BTC", 1.0, 49000.0);
+        let fill = OrderFill::new(700, "BTC", 1.0, 49000.0);
         market.execute_fill(fill);
 
         // Immediately after execute_fill completes the order, listener should have the fill
         assert_eq!(market.listener().fills.len(), 1);
+        assert_eq!(market.listener().fills[0].order_id, 700);
     }
 }
 
