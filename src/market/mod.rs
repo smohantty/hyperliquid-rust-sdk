@@ -106,5 +106,5 @@ pub use hyperliquid_market::{HyperliquidMarket, HyperliquidMarketInput};
 pub use listener::{MarketListener, NoOpListener};
 pub use market::Market;
 pub use paper_trading_market::{PaperPosition, PaperTradingMarket, PaperTradingMarketInput};
-pub use types::{OrderFill, OrderRequest, OrderSide, OrderStatus, TimeInForce};
+pub use types::{OrderFill, OrderRequest, OrderSide, OrderStatus};
 

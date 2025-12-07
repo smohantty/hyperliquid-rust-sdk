@@ -283,7 +283,7 @@ impl<L: MarketListener> HyperliquidMarket<L> {
             sz: order.qty,
             cloid: None,
             order_type: ClientOrder::Limit(ClientLimit {
-                tif: order.tif.as_str().to_string(),
+                tif: "Gtc".to_string(),
             }),
         };
 

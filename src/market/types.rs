@@ -24,29 +24,6 @@ impl OrderSide {
     }
 }
 
-/// Time in force for limit orders
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-pub enum TimeInForce {
-    /// Good till cancelled (default)
-    #[default]
-    Gtc,
-    /// Immediate or cancel
-    Ioc,
-    /// Add liquidity only (post only, maker only)
-    Alo,
-}
-
-impl TimeInForce {
-    /// Convert to exchange string format
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            TimeInForce::Gtc => "Gtc",
-            TimeInForce::Ioc => "Ioc",
-            TimeInForce::Alo => "Alo",
-        }
-    }
-}
-
 /// Order request input to the Market
 ///
 /// Represents a new limit order to be placed in the market (spot or perp).
@@ -66,12 +43,10 @@ pub struct OrderRequest {
     pub limit_price: f64,
     /// Reduce only flag (for perps - only reduce existing position)
     pub reduce_only: bool,
-    /// Time in force
-    pub tif: TimeInForce,
 }
 
 impl OrderRequest {
-    /// Create a new order request with default settings (Gtc, not reduce_only)
+    /// Create a new order request with default settings (not reduce_only)
     ///
     /// # Arguments
     /// * `order_id` - User-provided identifier (returned in fill callback)
@@ -98,7 +73,6 @@ impl OrderRequest {
             qty,
             limit_price,
             reduce_only: false,
-            tif: TimeInForce::default(),
         }
     }
 
@@ -115,12 +89,6 @@ impl OrderRequest {
     /// Set reduce_only flag (builder pattern)
     pub fn reduce_only(mut self, reduce_only: bool) -> Self {
         self.reduce_only = reduce_only;
-        self
-    }
-
-    /// Set time in force (builder pattern)
-    pub fn tif(mut self, tif: TimeInForce) -> Self {
-        self.tif = tif;
         self
     }
 
@@ -217,14 +185,6 @@ mod tests {
     }
 
     #[test]
-    fn test_time_in_force() {
-        assert_eq!(TimeInForce::Gtc.as_str(), "Gtc");
-        assert_eq!(TimeInForce::Ioc.as_str(), "Ioc");
-        assert_eq!(TimeInForce::Alo.as_str(), "Alo");
-        assert_eq!(TimeInForce::default(), TimeInForce::Gtc);
-    }
-
-    #[test]
     fn test_order_request_new() {
         let order = OrderRequest::new(100, "BTC", OrderSide::Buy, 1.5, 50000.0);
         assert_eq!(order.order_id, 100);
@@ -233,7 +193,6 @@ mod tests {
         assert_eq!(order.qty, 1.5);
         assert_eq!(order.limit_price, 50000.0);
         assert!(!order.reduce_only);
-        assert_eq!(order.tif, TimeInForce::Gtc);
         assert!(order.is_valid());
         assert!(order.is_buy());
     }
@@ -252,11 +211,9 @@ mod tests {
     #[test]
     fn test_order_request_builder() {
         let order = OrderRequest::buy(1, "BTC", 1.0, 50000.0)
-            .reduce_only(true)
-            .tif(TimeInForce::Ioc);
+            .reduce_only(true);
 
         assert!(order.reduce_only);
-        assert_eq!(order.tif, TimeInForce::Ioc);
     }
 
     #[test]
