@@ -219,23 +219,31 @@ impl<L: MarketListener> HyperliquidMarket<L> {
                         // Find order by exchange OID and update
                         if let Some(&internal_id) = self.orders_by_exchange_oid.get(&oid) {
                             if let Some(order) = self.orders_by_internal_id.get_mut(&internal_id) {
+                                let was_active = order.status.is_active();
                                 order.fill(qty, price);
-
-                                // Create fill notification (M3)
-                                let order_fill = OrderFill::new(
-                                    internal_id,
-                                    &fill.coin,
-                                    qty,
-                                    price,
-                                );
-
-                                // M6: Synchronous notification
-                                self.listener.on_order_filled(order_fill);
 
                                 if fill.side == "B" {
                                     info!("Fill: bought {} {} at {}", qty, fill.coin, price);
                                 } else {
                                     info!("Fill: sold {} {} at {}", qty, fill.coin, price);
+                                }
+
+                                // Only notify when order is fully filled (M3)
+                                if was_active && matches!(order.status, OrderStatus::Filled(_)) {
+                                    let order_fill = OrderFill::new(
+                                        internal_id,
+                                        &fill.coin,
+                                        order.request.qty,      // Total order qty
+                                        order.avg_fill_price,   // Average fill price
+                                    );
+
+                                    info!(
+                                        "Order {} fully filled: {} {} at avg price {}",
+                                        internal_id, order.request.qty, fill.coin, order.avg_fill_price
+                                    );
+
+                                    // M6: Synchronous notification
+                                    self.listener.on_order_filled(order_fill);
                                 }
                             }
                         } else {
@@ -363,18 +371,30 @@ impl<L: MarketListener> HyperliquidMarket<L> {
 
     /// Inject an external fill (M9)
     ///
-    /// Accepts an externally described fill and immediately notifies the listener.
+    /// Accepts an externally described fill and updates order state.
+    /// Only notifies the listener when the order is fully filled.
     ///
     /// # Arguments
     /// * `fill` - The fill details
     pub fn execute_fill(&mut self, fill: OrderFill) {
         // Update order state if it exists
         if let Some(order) = self.orders_by_internal_id.get_mut(&fill.order_id) {
+            let was_active = order.status.is_active();
             order.fill(fill.qty, fill.price);
-        }
 
-        // M6: Synchronous notification
-        self.listener.on_order_filled(fill);
+            // Only notify when order is fully filled
+            if was_active && matches!(order.status, OrderStatus::Filled(_)) {
+                let complete_fill = OrderFill::new(
+                    fill.order_id,
+                    &order.request.asset,
+                    order.request.qty,      // Total order qty
+                    order.avg_fill_price,   // Average fill price
+                );
+
+                // M6: Synchronous notification
+                self.listener.on_order_filled(complete_fill);
+            }
+        }
     }
 
     /// Query current price for an asset (M10)

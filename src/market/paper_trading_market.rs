@@ -339,6 +339,7 @@ impl<L: MarketListener> PaperTradingMarket<L> {
 
         // Update order status
         if let Some(order) = self.orders.get_mut(&order_id) {
+            let was_active = order.status.is_active();
             order.fill(qty, price);
 
             let side_str = if is_buy { "bought" } else { "sold" };
@@ -347,11 +348,23 @@ impl<L: MarketListener> PaperTradingMarket<L> {
                 side_str, qty, asset, price, fee
             );
 
-            // Create fill notification
-            let fill = OrderFill::new(order_id, &asset, qty, price);
+            // Only notify when order is fully filled (M3)
+            if was_active && matches!(order.status, OrderStatus::Filled(_)) {
+                let fill = OrderFill::new(
+                    order_id,
+                    &asset,
+                    order.request.qty,      // Total order qty
+                    order.avg_fill_price,   // Average fill price
+                );
 
-            // M6: Synchronous notification (M3)
-            self.listener.on_order_filled(fill);
+                info!(
+                    "Paper order {} fully filled: {} {} at avg price {}",
+                    order_id, order.request.qty, asset, order.avg_fill_price
+                );
+
+                // M6: Synchronous notification
+                self.listener.on_order_filled(fill);
+            }
         }
     }
 
@@ -409,14 +422,26 @@ impl<L: MarketListener> PaperTradingMarket<L> {
     /// Inject an external fill (M9)
     ///
     /// For testing or manual fill injection.
+    /// Only notifies the listener when the order is fully filled.
     pub fn execute_fill(&mut self, fill: OrderFill) {
         // Update order state if it exists
         if let Some(order) = self.orders.get_mut(&fill.order_id) {
+            let was_active = order.status.is_active();
             order.fill(fill.qty, fill.price);
-        }
 
-        // M6: Synchronous notification
-        self.listener.on_order_filled(fill);
+            // Only notify when order is fully filled
+            if was_active && matches!(order.status, OrderStatus::Filled(_)) {
+                let complete_fill = OrderFill::new(
+                    fill.order_id,
+                    &order.request.asset,
+                    order.request.qty,      // Total order qty
+                    order.avg_fill_price,   // Average fill price
+                );
+
+                // M6: Synchronous notification
+                self.listener.on_order_filled(complete_fill);
+            }
+        }
     }
 
     /// Query current price for an asset (M10)
