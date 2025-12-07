@@ -2,7 +2,7 @@
 //!
 //! This module provides a generic strategy interface for building trading strategies.
 //! Strategies are decoupled from markets - they receive price updates and fill notifications,
-//! and return actions (orders) to be executed.
+//! and return orders to be executed.
 //!
 //! # Design Philosophy
 //!
@@ -14,7 +14,7 @@
 //! # Example
 //!
 //! ```rust
-//! use hyperliquid_rust_sdk::strategy::{Strategy, StrategyAction};
+//! use hyperliquid_rust_sdk::strategy::Strategy;
 //! use hyperliquid_rust_sdk::market::{OrderRequest, OrderFill};
 //!
 //! struct SimpleStrategy {
@@ -23,18 +23,18 @@
 //! }
 //!
 //! impl Strategy for SimpleStrategy {
-//!     fn on_price_update(&mut self, asset: &str, price: f64) -> StrategyAction {
+//!     fn on_price_update(&mut self, asset: &str, price: f64) -> Vec<OrderRequest> {
 //!         if !self.has_position && price < 50000.0 {
 //!             self.next_order_id += 1;
-//!             StrategyAction::single(OrderRequest::buy(self.next_order_id, asset, 0.1, price))
+//!             vec![OrderRequest::buy(self.next_order_id, asset, 0.1, price)]
 //!         } else {
-//!             StrategyAction::none()
+//!             vec![]
 //!         }
 //!     }
 //!
-//!     fn on_order_filled(&mut self, fill: &OrderFill) -> StrategyAction {
+//!     fn on_order_filled(&mut self, fill: &OrderFill) -> Vec<OrderRequest> {
 //!         self.has_position = true;
-//!         StrategyAction::none()
+//!         vec![]
 //!     }
 //! }
 //! ```
@@ -51,24 +51,20 @@
 //!
 //! impl MarketListener for Bot {
 //!     fn on_price_update(&mut self, asset: &str, price: f64) {
-//!         let action = self.strategy.on_price_update(asset, price);
-//!         for order in action {
+//!         for order in self.strategy.on_price_update(asset, price) {
 //!             self.market.place_order(order);
 //!         }
 //!     }
 //!
 //!     fn on_order_filled(&mut self, fill: OrderFill) {
-//!         let action = self.strategy.on_order_filled(&fill);
-//!         for order in action {
+//!         for order in self.strategy.on_order_filled(&fill) {
 //!             self.market.place_order(order);
 //!         }
 //!     }
 //! }
 //! ```
 
-mod action;
 mod traits;
 
-pub use action::StrategyAction;
 pub use traits::{NoOpStrategy, Strategy};
 
