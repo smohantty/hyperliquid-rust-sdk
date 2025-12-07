@@ -6,6 +6,7 @@ mod exchange;
 pub mod grid;
 mod helpers;
 mod info;
+pub mod market;
 mod market_maker;
 mod meta;
 mod prelude;
