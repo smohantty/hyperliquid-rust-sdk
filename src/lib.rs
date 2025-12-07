@@ -12,6 +12,7 @@ mod meta;
 mod prelude;
 mod req;
 mod signature;
+pub mod strategy;
 mod ws;
 pub use consts::{EPSILON, LOCAL_API_URL, MAINNET_API_URL, TESTNET_API_URL};
 pub use eip712::Eip712;
