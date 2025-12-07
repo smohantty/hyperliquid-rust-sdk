@@ -303,10 +303,12 @@ impl<L: MarketListener> HyperliquidMarket<L> {
                     if let Ok(price) = price_str.parse::<f64>() {
                         // Update internal price state (M1)
                         self.prices.insert(asset.clone(), price);
-                        // M6: Synchronous notification, collect returned orders
-                        if let Ok(mut listener) = self.listener.try_write() {
-                            let orders = listener.on_price_update(&asset, price);
-                            pending_orders.extend(orders);
+                        // Only notify listener for our configured asset
+                        if asset == self.asset {
+                            if let Ok(mut listener) = self.listener.try_write() {
+                                let orders = listener.on_price_update(&asset, price);
+                                pending_orders.extend(orders);
+                            }
                         }
                     }
                 }

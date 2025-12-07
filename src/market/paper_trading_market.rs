@@ -323,8 +323,8 @@ impl<L: MarketListener> PaperTradingMarket<L> {
                     let old_price = self.prices.get(&asset).copied();
                     self.prices.insert(asset.clone(), price);
 
-                    // Only notify if price actually changed
-                    if old_price != Some(price) {
+                    // Only notify listener for our configured asset
+                    if asset == self.asset && old_price != Some(price) {
                         // M6: Synchronous notification, collect returned orders
                         if let Ok(mut listener) = self.listener.try_write() {
                             let orders = listener.on_price_update(&asset, price);
