@@ -1,28 +1,29 @@
 //! Bot Module
 //!
-//! The Bot combines a Market and a Strategy, handling the event loop
-//! and executing orders returned by the strategy.
+//! The Bot is a MarketListener that wraps a Strategy.
+//! It receives market events, calls the strategy, and collects orders to execute.
 //!
-//! # Example
+//! # Usage Pattern
 //!
 //! ```ignore
-//! use hyperliquid_rust_sdk::bot::{Bot, BotConfig, MarketMode};
+//! use hyperliquid_rust_sdk::bot::Bot;
+//! use hyperliquid_rust_sdk::market::{HyperliquidMarket, HyperliquidMarketInput};
 //! use hyperliquid_rust_sdk::strategy::Strategy;
 //!
-//! // Create config
-//! let config = BotConfig::paper("HYPE/USDC", 10_000.0);
-//! // or: BotConfig::live("HYPE/USDC", wallet, Some(BaseUrl::Mainnet));
+//! // Create your strategy
+//! let strategy = MyStrategy::new();
 //!
-//! // Create bot with your strategy
-//! let mut bot = Bot::new(config, MyStrategy::new()).await?;
+//! // Create bot wrapping the strategy
+//! let bot = Bot::new(strategy);
 //!
-//! // Run the bot (processes events and executes strategy)
-//! bot.run().await;
+//! // Create market with bot as listener
+//! let mut market = HyperliquidMarket::new(input, bot).await?;
+//!
+//! // Market runs event loop, bot receives callbacks
+//! // After processing, get pending orders from bot and place them
+//! market.start().await;
 //! ```
 
-mod config;
-mod runner;
+mod bot;
 
-pub use config::{BotConfig, MarketMode};
-pub use runner::Bot;
-
+pub use bot::Bot;
