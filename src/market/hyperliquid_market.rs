@@ -9,7 +9,7 @@ use log::{debug, error, info};
 use tokio::sync::mpsc::unbounded_channel;
 
 use super::listener::MarketListener;
-use super::types::{OrderFill, OrderRequest, OrderStatus};
+use super::types::{AssetInfo, OrderFill, OrderRequest, OrderStatus};
 use crate::{
     BaseUrl, ClientCancelRequest, ClientLimit, ClientOrder, ClientOrderRequest, ExchangeClient,
     ExchangeDataStatus, ExchangeResponseStatus, InfoClient, Message, Subscription, UserData,
@@ -478,6 +478,108 @@ impl<L: MarketListener> HyperliquidMarket<L> {
     /// Get all current prices
     pub fn all_prices(&self) -> &HashMap<String, f64> {
         &self.prices
+    }
+
+    /// Query asset information including balances and precision
+    ///
+    /// Fetches current balances from the exchange and determines
+    /// the precision (decimal places) for size and price.
+    ///
+    /// # Arguments
+    /// * `asset` - Asset to query (e.g., "BTC", "ETH", "HYPE/USDC")
+    ///
+    /// # Returns
+    /// `AssetInfo` with balances and precision, or error if asset not found
+    pub async fn asset_info(&self, asset: &str) -> Result<AssetInfo, crate::Error> {
+        // Determine if this is a spot or perp asset
+        let is_spot = asset.contains('/');
+
+        // Get balances
+        let (base_balance, usdc_balance) = if is_spot {
+            let balances = self.info_client.user_token_balances(self.user_address).await?;
+
+            // Parse base asset name (e.g., "HYPE" from "HYPE/USDC")
+            let base_name = asset.split('/').next().unwrap_or(asset);
+
+            let base_bal = balances
+                .balances
+                .iter()
+                .find(|b| b.coin == base_name)
+                .and_then(|b| b.total.parse::<f64>().ok())
+                .unwrap_or(0.0);
+
+            let usdc_bal = balances
+                .balances
+                .iter()
+                .find(|b| b.coin == "USDC")
+                .and_then(|b| b.total.parse::<f64>().ok())
+                .unwrap_or(0.0);
+
+            (base_bal, usdc_bal)
+        } else {
+            // For perps, get clearinghouse state
+            let state = self.info_client.user_state(self.user_address).await?;
+
+            let position = state
+                .asset_positions
+                .iter()
+                .find(|p| p.position.coin == asset)
+                .map(|p| p.position.szi.parse::<f64>().unwrap_or(0.0))
+                .unwrap_or(0.0);
+
+            let margin = state
+                .margin_summary
+                .account_value
+                .parse::<f64>()
+                .unwrap_or(0.0);
+
+            (position, margin)
+        };
+
+        // Get precision
+        let (sz_decimals, price_decimals) = if is_spot {
+            let spot_meta = self.info_client.spot_meta().await?;
+            let base_name = asset.split('/').next().unwrap_or(asset);
+
+            // Build index to name mapping
+            let index_to_token: std::collections::HashMap<_, _> = spot_meta
+                .tokens
+                .iter()
+                .map(|t| (t.index, t))
+                .collect();
+
+            // Find the spot asset
+            let mut found_sz = 4u32;
+            for spot_asset in &spot_meta.universe {
+                if let Some(token) = index_to_token.get(&spot_asset.tokens[0]) {
+                    if token.name == base_name || asset == spot_asset.name {
+                        found_sz = token.sz_decimals as u32;
+                        break;
+                    }
+                }
+            }
+
+            // Spot assets typically use 6 decimals for USDC prices
+            (found_sz, 6u32)
+        } else {
+            let meta = self.info_client.meta().await?;
+            let asset_meta = meta
+                .universe
+                .iter()
+                .find(|a| a.name == asset)
+                .ok_or_else(|| crate::Error::AssetNotFound)?;
+
+            // Perps: sz_decimals from meta, price_decimals = 5 (standard for perps)
+            (asset_meta.sz_decimals, 5u32)
+        };
+
+        Ok(AssetInfo::new(
+            asset,
+            base_balance,
+            usdc_balance,
+            sz_decimals,
+            price_decimals,
+        ))
     }
 }
 

@@ -136,6 +136,97 @@ impl OrderFill {
     }
 }
 
+/// Asset information including balances and precision
+///
+/// Contains all the information needed to trade an asset:
+/// - Asset name and balances (base and quote)
+/// - Precision for size and price (decimal places)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AssetInfo {
+    /// Asset name (e.g., "BTC", "ETH", "HYPE/USDC")
+    pub name: String,
+    /// Base asset balance (e.g., BTC balance for BTC/USDC)
+    pub balance: f64,
+    /// Quote currency balance (USDC)
+    pub usdc_balance: f64,
+    /// Size decimals (number of decimal places for quantity)
+    pub sz_decimals: u32,
+    /// Price decimals (number of decimal places for price)
+    pub price_decimals: u32,
+}
+
+impl AssetInfo {
+    /// Create new asset info
+    pub fn new(
+        name: impl Into<String>,
+        balance: f64,
+        usdc_balance: f64,
+        sz_decimals: u32,
+        price_decimals: u32,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            balance,
+            usdc_balance,
+            sz_decimals,
+            price_decimals,
+        }
+    }
+
+    /// Get the size step (minimum size increment)
+    pub fn sz_step(&self) -> f64 {
+        10f64.powi(-(self.sz_decimals as i32))
+    }
+
+    /// Get the price step (minimum price increment)
+    pub fn price_step(&self) -> f64 {
+        10f64.powi(-(self.price_decimals as i32))
+    }
+
+    /// Round size to valid precision
+    pub fn round_size(&self, size: f64) -> f64 {
+        let factor = 10f64.powi(self.sz_decimals as i32);
+        (size * factor).floor() / factor
+    }
+
+    /// Round price to valid precision
+    ///
+    /// # Arguments
+    /// * `price` - The price to round
+    /// * `round_up` - If true, round up (for sell orders), else round down (for buy orders)
+    pub fn round_price(&self, price: f64, round_up: bool) -> f64 {
+        let factor = 10f64.powi(self.price_decimals as i32);
+        if round_up {
+            (price * factor).ceil() / factor
+        } else {
+            (price * factor).floor() / factor
+        }
+    }
+
+    /// Check if we have sufficient balance for a buy order
+    pub fn can_buy(&self, qty: f64, price: f64) -> bool {
+        let cost = qty * price;
+        self.usdc_balance >= cost
+    }
+
+    /// Check if we have sufficient balance for a sell order
+    pub fn can_sell(&self, qty: f64) -> bool {
+        self.balance >= qty
+    }
+}
+
+impl Default for AssetInfo {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            balance: 0.0,
+            usdc_balance: 0.0,
+            sz_decimals: 4,
+            price_decimals: 2,
+        }
+    }
+}
+
 /// Order status variants
 ///
 /// Represents the current state of an order in the market.
@@ -248,6 +339,69 @@ mod tests {
         assert!(!OrderStatus::Pending.is_complete());
         assert!(OrderStatus::Filled(50000.0).is_complete());
         assert!(OrderStatus::Cancelled.is_complete());
+    }
+
+    #[test]
+    fn test_asset_info_new() {
+        let info = AssetInfo::new("BTC", 1.5, 10000.0, 4, 2);
+        assert_eq!(info.name, "BTC");
+        assert_eq!(info.balance, 1.5);
+        assert_eq!(info.usdc_balance, 10000.0);
+        assert_eq!(info.sz_decimals, 4);
+        assert_eq!(info.price_decimals, 2);
+    }
+
+    #[test]
+    fn test_asset_info_steps() {
+        let info = AssetInfo::new("ETH", 0.0, 0.0, 4, 2);
+        assert!((info.sz_step() - 0.0001).abs() < 1e-10);
+        assert!((info.price_step() - 0.01).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_asset_info_round_size() {
+        let info = AssetInfo::new("BTC", 0.0, 0.0, 4, 2);
+        assert_eq!(info.round_size(1.23456), 1.2345);
+        assert_eq!(info.round_size(1.23451), 1.2345);
+        assert_eq!(info.round_size(0.00001), 0.0);
+    }
+
+    #[test]
+    fn test_asset_info_round_price() {
+        let info = AssetInfo::new("BTC", 0.0, 0.0, 4, 2);
+
+        // Round down (for buy orders)
+        assert_eq!(info.round_price(50000.456, false), 50000.45);
+
+        // Round up (for sell orders)
+        assert_eq!(info.round_price(50000.451, true), 50000.46);
+    }
+
+    #[test]
+    fn test_asset_info_can_buy_sell() {
+        let info = AssetInfo::new("BTC", 1.0, 50000.0, 4, 2);
+
+        // Can buy: 0.5 BTC at 50000 = 25000 USDC, we have 50000
+        assert!(info.can_buy(0.5, 50000.0));
+
+        // Cannot buy: 2 BTC at 50000 = 100000 USDC, we only have 50000
+        assert!(!info.can_buy(2.0, 50000.0));
+
+        // Can sell: 0.5 BTC, we have 1.0
+        assert!(info.can_sell(0.5));
+
+        // Cannot sell: 2 BTC, we only have 1.0
+        assert!(!info.can_sell(2.0));
+    }
+
+    #[test]
+    fn test_asset_info_default() {
+        let info = AssetInfo::default();
+        assert_eq!(info.name, "");
+        assert_eq!(info.balance, 0.0);
+        assert_eq!(info.usdc_balance, 0.0);
+        assert_eq!(info.sz_decimals, 4);
+        assert_eq!(info.price_decimals, 2);
     }
 }
 

@@ -9,7 +9,7 @@ use log::{error, info};
 use tokio::sync::mpsc::unbounded_channel;
 
 use super::listener::MarketListener;
-use super::types::{OrderFill, OrderRequest, OrderSide, OrderStatus};
+use super::types::{AssetInfo, OrderFill, OrderRequest, OrderSide, OrderStatus};
 use crate::{BaseUrl, InfoClient, Message, Subscription};
 
 /// Input configuration for creating a PaperTradingMarket
@@ -500,6 +500,74 @@ impl<L: MarketListener> PaperTradingMarket<L> {
         self.orders.clear();
         self.positions.clear();
         info!("Paper trading reset with balance: {}", initial_balance);
+    }
+
+    /// Query asset information including balances and precision
+    ///
+    /// Returns paper trading balances combined with real precision from exchange.
+    ///
+    /// # Arguments
+    /// * `asset` - Asset to query (e.g., "BTC", "ETH", "HYPE/USDC")
+    ///
+    /// # Returns
+    /// `AssetInfo` with paper balances and real precision from exchange
+    pub async fn asset_info(&self, asset: &str) -> Result<AssetInfo, crate::Error> {
+        // Determine if this is a spot or perp asset
+        let is_spot = asset.contains('/');
+
+        // Get paper trading balances
+        let base_balance = self
+            .positions
+            .get(asset)
+            .map(|p| p.size)
+            .unwrap_or(0.0);
+
+        let usdc_balance = self.balance;
+
+        // Get precision from real exchange metadata
+        let (sz_decimals, price_decimals) = if is_spot {
+            let spot_meta = self.info_client.spot_meta().await?;
+            let base_name = asset.split('/').next().unwrap_or(asset);
+
+            // Build index to token mapping
+            let index_to_token: std::collections::HashMap<_, _> = spot_meta
+                .tokens
+                .iter()
+                .map(|t| (t.index, t))
+                .collect();
+
+            // Find the spot asset
+            let mut found_sz = 4u32;
+            for spot_asset in &spot_meta.universe {
+                if let Some(token) = index_to_token.get(&spot_asset.tokens[0]) {
+                    if token.name == base_name || asset == spot_asset.name {
+                        found_sz = token.sz_decimals as u32;
+                        break;
+                    }
+                }
+            }
+
+            // Spot assets typically use 6 decimals for USDC prices
+            (found_sz, 6u32)
+        } else {
+            let meta = self.info_client.meta().await?;
+            let asset_meta = meta
+                .universe
+                .iter()
+                .find(|a| a.name == asset)
+                .ok_or_else(|| crate::Error::AssetNotFound)?;
+
+            // Perps: sz_decimals from meta, price_decimals = 5 (standard for perps)
+            (asset_meta.sz_decimals, 5u32)
+        };
+
+        Ok(AssetInfo::new(
+            asset,
+            base_balance,
+            usdc_balance,
+            sz_decimals,
+            price_decimals,
+        ))
     }
 }
 
