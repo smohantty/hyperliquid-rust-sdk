@@ -1,5 +1,7 @@
 //! Bot - MarketListener that wraps a Strategy
 
+use log::{debug, info};
+
 use crate::market::{MarketListener, OrderFill, OrderRequest};
 use crate::strategy::{Strategy, StrategyStatus};
 
@@ -361,11 +363,36 @@ fn format_custom_data(value: &serde_json::Value) -> String {
 
 impl<S: Strategy> MarketListener for Bot<S> {
     fn on_price_update(&mut self, asset: &str, price: f64) -> Vec<OrderRequest> {
-        self.strategy.on_price_update(asset, price)
+        debug!("Bot[{}]: price update {} = {:.4}", self.strategy.name(), asset, price);
+        let orders = self.strategy.on_price_update(asset, price);
+        if !orders.is_empty() {
+            info!(
+                "Bot[{}]: strategy returned {} order(s) on price update",
+                self.strategy.name(),
+                orders.len()
+            );
+        }
+        orders
     }
 
     fn on_order_filled(&mut self, fill: OrderFill) -> Vec<OrderRequest> {
-        self.strategy.on_order_filled(&fill)
+        info!(
+            "Bot[{}]: order {} filled - {} {} @ {:.4}",
+            self.strategy.name(),
+            fill.order_id,
+            fill.qty,
+            fill.asset,
+            fill.price
+        );
+        let orders = self.strategy.on_order_filled(&fill);
+        if !orders.is_empty() {
+            info!(
+                "Bot[{}]: strategy returned {} order(s) on fill",
+                self.strategy.name(),
+                orders.len()
+            );
+        }
+        orders
     }
 }
 
