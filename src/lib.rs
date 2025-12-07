@@ -1,4 +1,5 @@
 #![deny(unreachable_pub)]
+pub mod bot;
 mod consts;
 mod eip712;
 mod errors;
