@@ -187,8 +187,10 @@ impl PaperPosition {
 /// market.start().await;
 /// ```
 pub struct PaperTradingMarket<L: MarketListener> {
-    /// Asset being traded
+    /// Asset being traded (user-provided name like "HYPE/USDC" or "BTC")
     pub asset: String,
+    /// Exchange asset key (e.g., "@107" for spot, "BTC" for perp)
+    asset_key: String,
     /// Cached asset info (precision is static, balances are paper)
     asset_info: AssetInfo,
     /// Shared listener instance for external access
@@ -221,11 +223,16 @@ impl<L: MarketListener> PaperTradingMarket<L> {
         // Paper trading always uses Mainnet for real price data
         let info_client = InfoClient::new(None, Some(BaseUrl::Mainnet)).await?;
 
+        // Resolve asset to exchange key (e.g., "HYPE/USDC" -> "@107")
+        let asset_key = Self::resolve_asset_key(&info_client, &input.asset).await?;
+        info!("Resolved {} -> {}", input.asset, asset_key);
+
         // Fetch precision from exchange (static data)
         let asset_info = Self::fetch_precision(&info_client, &input.asset, input.initial_balance).await?;
 
         Ok(Self {
             asset: input.asset,
+            asset_key,
             asset_info,
             listener,
             info_client,
@@ -236,6 +243,34 @@ impl<L: MarketListener> PaperTradingMarket<L> {
             total_fees: 0.0,
             fee_rate: 0.0001, // Default 0.01% fee
         })
+    }
+
+    /// Resolve user-friendly asset name to exchange key
+    async fn resolve_asset_key(info_client: &InfoClient, asset: &str) -> Result<String, crate::Error> {
+        let is_spot = asset.contains('/');
+
+        if is_spot {
+            let spot_meta = info_client.spot_meta().await?;
+            let base_name = asset.split('/').next().unwrap_or(asset);
+
+            let index_to_name: std::collections::HashMap<usize, &str> = spot_meta
+                .tokens
+                .iter()
+                .map(|t| (t.index, t.name.as_str()))
+                .collect();
+
+            for spot_asset in &spot_meta.universe {
+                if let Some(token_name) = index_to_name.get(&spot_asset.tokens[0]) {
+                    if *token_name == base_name || asset == spot_asset.name {
+                        return Ok(format!("@{}", spot_asset.index));
+                    }
+                }
+            }
+            Err(crate::Error::AssetNotFound)
+        } else {
+            // Perp assets use the name directly
+            Ok(asset.to_string())
+        }
     }
 
     /// Fetch precision from exchange (internal helper)
@@ -323,11 +358,12 @@ impl<L: MarketListener> PaperTradingMarket<L> {
                     let old_price = self.prices.get(&asset).copied();
                     self.prices.insert(asset.clone(), price);
 
-                    // Only notify listener for our configured asset
-                    if asset == self.asset && old_price != Some(price) {
+                    // Only notify listener for our configured asset (compare with exchange key)
+                    if asset == self.asset_key && old_price != Some(price) {
                         // M6: Synchronous notification, collect returned orders
+                        // Pass user-friendly asset name, not exchange key
                         if let Ok(mut listener) = self.listener.try_write() {
-                            let orders = listener.on_price_update(&asset, price);
+                            let orders = listener.on_price_update(&self.asset, price);
                             pending_orders.extend(orders);
                         }
                     }
