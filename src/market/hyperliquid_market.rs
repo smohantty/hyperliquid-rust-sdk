@@ -269,29 +269,21 @@ impl<L: MarketListener> HyperliquidMarket<L> {
     /// Place a new order on Hyperliquid (M8)
     ///
     /// # Arguments
-    /// * `order` - The order request (contains user-provided order_id)
+    /// * `order` - The order request (contains user-provided order_id, side, reduce_only, tif)
     pub async fn place_order(&mut self, order: OrderRequest) {
         let user_order_id = order.order_id;
         let mut tracked_order = TrackedOrder::new(order.clone());
 
-        // Determine if buy or sell based on limit price vs current price
-        // For simplicity: if limit_price >= current_price, it's a buy
-        let is_buy = self
-            .prices
-            .get(&order.asset)
-            .map(|&current| order.limit_price >= current)
-            .unwrap_or(true);
-
         // Place order on exchange
         let exchange_order = ClientOrderRequest {
             asset: order.asset.clone(),
-            is_buy,
-            reduce_only: false,
+            is_buy: order.side.is_buy(),
+            reduce_only: order.reduce_only,
             limit_px: order.limit_price,
             sz: order.qty,
             cloid: None,
             order_type: ClientOrder::Limit(ClientLimit {
-                tif: "Gtc".to_string(),
+                tif: order.tif.as_str().to_string(),
             }),
         };
 
@@ -492,13 +484,14 @@ impl<L: MarketListener> HyperliquidMarket<L> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::market::types::OrderSide;
 
     // Integration tests would require actual exchange connection
     // Unit tests for internal logic
 
     #[test]
     fn test_tracked_order_fill() {
-        let request = OrderRequest::new(100, "BTC", 2.0, 50000.0);
+        let request = OrderRequest::buy(100, "BTC", 2.0, 50000.0);
         let mut order = TrackedOrder::new(request);
 
         assert_eq!(order.status, OrderStatus::Pending);
@@ -520,12 +513,14 @@ mod tests {
 
     #[test]
     fn test_order_request_validation() {
-        let order = OrderRequest::new(200, "ETH", 1.5, 3000.0);
+        let order = OrderRequest::buy(200, "ETH", 1.5, 3000.0);
         assert!(order.is_valid());
         assert_eq!(order.order_id, 200);
         assert_eq!(order.asset, "ETH");
         assert_eq!(order.qty, 1.5);
         assert_eq!(order.limit_price, 3000.0);
+        assert_eq!(order.side, OrderSide::Buy);
+        assert!(!order.reduce_only);
     }
 }
 

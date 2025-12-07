@@ -199,7 +199,7 @@ mod tests {
         let mut market = Market::new(RecordingListener::default());
 
         // User provides order_id, orders are always placed as pending
-        let order = OrderRequest::new(100, "BTC", 1.0, 50000.0);
+        let order = OrderRequest::buy(100, "BTC", 1.0, 50000.0);
         market.place_order(order);
 
         assert_eq!(market.order_status(100), Some(OrderStatus::Pending));
@@ -214,7 +214,7 @@ mod tests {
         // Fill logic is handled by concrete implementations
         market.update_price("BTC", 49000.0);
 
-        let order = OrderRequest::new(200, "BTC", 1.0, 50000.0);
+        let order = OrderRequest::buy(200, "BTC", 1.0, 50000.0);
         market.place_order(order);
 
         // Order should be pending - no automatic fill
@@ -226,7 +226,7 @@ mod tests {
     fn test_execute_fill_m9() {
         let mut market = Market::new(RecordingListener::default());
 
-        let order = OrderRequest::new(300, "BTC", 1.0, 50000.0);
+        let order = OrderRequest::buy(300, "BTC", 1.0, 50000.0);
         market.place_order(order);
 
         // Execute fill - marks as filled and notifies with same order_id
@@ -250,7 +250,7 @@ mod tests {
     fn test_execute_fill_already_filled_m9() {
         let mut market = Market::new(RecordingListener::default());
 
-        let order = OrderRequest::new(400, "BTC", 1.0, 50000.0);
+        let order = OrderRequest::buy(400, "BTC", 1.0, 50000.0);
         market.place_order(order);
 
         // First fill
@@ -293,7 +293,7 @@ mod tests {
 
         assert!(market.order_status(999).is_none());
 
-        let order = OrderRequest::new(500, "BTC", 1.0, 50000.0);
+        let order = OrderRequest::buy(500, "BTC", 1.0, 50000.0);
         market.place_order(order);
 
         assert!(market.order_status(500).is_some());
@@ -303,7 +303,7 @@ mod tests {
     fn test_cancel_order() {
         let mut market = Market::new(NoOpListener);
 
-        let order = OrderRequest::new(600, "BTC", 1.0, 50000.0);
+        let order = OrderRequest::buy(600, "BTC", 1.0, 50000.0);
         market.place_order(order);
 
         assert!(market.cancel_order(600));
@@ -318,9 +318,9 @@ mod tests {
         let mut market = Market::new(NoOpListener);
 
         // User provides their own order IDs
-        market.place_order(OrderRequest::new(1001, "BTC", 1.0, 50000.0));
-        market.place_order(OrderRequest::new(1002, "BTC", 1.0, 50000.0));
-        market.place_order(OrderRequest::new(2001, "ETH", 1.0, 3000.0));
+        market.place_order(OrderRequest::buy(1001, "BTC", 1.0, 50000.0));
+        market.place_order(OrderRequest::sell(1002, "BTC", 1.0, 50000.0));
+        market.place_order(OrderRequest::buy(2001, "ETH", 1.0, 3000.0));
 
         assert!(market.order_status(1001).is_some());
         assert!(market.order_status(1002).is_some());
@@ -339,7 +339,7 @@ mod tests {
         assert_eq!(market.listener().price_updates.len(), 1);
 
         // Place order and fill it via execute_fill
-        let order = OrderRequest::new(700, "BTC", 1.0, 50000.0);
+        let order = OrderRequest::buy(700, "BTC", 1.0, 50000.0);
         market.place_order(order);
 
         // Execute a complete fill

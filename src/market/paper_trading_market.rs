@@ -9,15 +9,8 @@ use log::{error, info};
 use tokio::sync::mpsc::unbounded_channel;
 
 use super::listener::MarketListener;
-use super::types::{OrderFill, OrderRequest, OrderStatus};
+use super::types::{OrderFill, OrderRequest, OrderSide, OrderStatus};
 use crate::{BaseUrl, InfoClient, Message, Subscription};
-
-/// Order side for paper trading
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum OrderSide {
-    Buy,
-    Sell,
-}
 
 /// Input configuration for creating a PaperTradingMarket
 #[derive(Debug)]
@@ -37,10 +30,8 @@ impl Default for PaperTradingMarketInput {
 /// Internal order tracking for paper trading
 #[derive(Debug, Clone)]
 struct PaperOrder {
-    /// Order request details (contains user's order_id)
+    /// Order request details (contains user's order_id, side, etc.)
     request: OrderRequest,
-    /// Order side (buy or sell)
-    side: OrderSide,
     /// Current status
     status: OrderStatus,
     /// Filled quantity
@@ -53,10 +44,9 @@ struct PaperOrder {
 }
 
 impl PaperOrder {
-    fn new(request: OrderRequest, side: OrderSide) -> Self {
+    fn new(request: OrderRequest) -> Self {
         Self {
             request,
-            side,
             status: OrderStatus::Pending,
             filled_qty: 0.0,
             avg_fill_price: 0.0,
@@ -89,7 +79,7 @@ impl PaperOrder {
             return false;
         }
 
-        match self.side {
+        match self.request.side {
             // Buy order fills when mid price <= limit price
             OrderSide::Buy => mid_price <= self.request.limit_price,
             // Sell order fills when mid price >= limit price
@@ -173,20 +163,18 @@ impl PaperPosition {
 ///
 /// ```ignore
 /// use hyperliquid_rust_sdk::market::{
-///     PaperTradingMarket, PaperTradingMarketInput, NoOpListener, OrderSide
+///     PaperTradingMarket, PaperTradingMarketInput, NoOpListener, OrderRequest
 /// };
 ///
 /// let input = PaperTradingMarketInput {
 ///     initial_balance: 10_000.0,
-///     base_url: Some(BaseUrl::Mainnet),
-///     wallet: None,
 /// };
 ///
 /// let mut market = PaperTradingMarket::new(input, NoOpListener).await?;
 ///
 /// // Place a simulated buy order
-/// let order = OrderRequest::new("BTC", 0.1, 50000.0);
-/// let order_id = market.place_order(order, OrderSide::Buy);
+/// let order = OrderRequest::buy(1, "BTC", 0.1, 50000.0);
+/// market.place_order(order);
 ///
 /// // Start event loop - orders fill when midprice crosses limit
 /// market.start().await;
@@ -289,30 +277,34 @@ impl<L: MarketListener> PaperTradingMarket<L> {
     /// Check all pending orders for an asset and fill if conditions are met
     fn check_and_fill_orders(&mut self, asset: &str, mid_price: f64) {
         // Collect orders to fill (can't modify while iterating)
-        let orders_to_fill: Vec<(u64, f64, OrderSide)> = self
+        let orders_to_fill: Vec<u64> = self
             .orders
             .iter()
             .filter(|(_, order)| order.request.asset == asset && order.should_fill(mid_price))
-            .map(|(&id, order)| {
-                let remaining = order.request.qty - order.filled_qty;
-                (id, remaining, order.side)
-            })
+            .map(|(&id, _)| id)
             .collect();
 
         // Process fills
-        for (order_id, qty, side) in orders_to_fill {
-            self.execute_paper_fill(order_id, qty, mid_price, side);
+        for order_id in orders_to_fill {
+            self.execute_paper_fill(order_id, mid_price);
         }
     }
 
     /// Execute a simulated fill
-    fn execute_paper_fill(&mut self, order_id: u64, qty: f64, price: f64, side: OrderSide) {
+    fn execute_paper_fill(&mut self, order_id: u64, price: f64) {
+        let Some(order) = self.orders.get(&order_id) else {
+            return;
+        };
+
+        let qty = order.request.qty - order.filled_qty;
+        let is_buy = order.request.side.is_buy();
+        let asset = order.request.asset.clone();
+
         // Calculate fee
         let notional = qty * price;
         let fee = notional * self.fee_rate;
 
         // Update balance
-        let is_buy = side == OrderSide::Buy;
         if is_buy {
             self.balance -= notional + fee;
         } else {
@@ -321,12 +313,6 @@ impl<L: MarketListener> PaperTradingMarket<L> {
         self.total_fees += fee;
 
         // Update position
-        let asset = self
-            .orders
-            .get(&order_id)
-            .map(|o| o.request.asset.clone())
-            .unwrap_or_default();
-
         let position = self.positions.entry(asset.clone()).or_default();
         position.apply_fill(qty, price, is_buy);
 
@@ -376,11 +362,11 @@ impl<L: MarketListener> PaperTradingMarket<L> {
     /// Place a new paper order (M8)
     ///
     /// # Arguments
-    /// * `order` - The order request (contains user-provided order_id)
-    /// * `side` - Buy or Sell
-    pub fn place_order(&mut self, order: OrderRequest, side: OrderSide) {
+    /// * `order` - The order request (contains user-provided order_id, side, reduce_only, tif)
+    pub fn place_order(&mut self, order: OrderRequest) {
         let user_order_id = order.order_id;
-        let paper_order = PaperOrder::new(order.clone(), side);
+        let side = order.side;
+        let paper_order = PaperOrder::new(order.clone());
 
         info!(
             "Paper order {}: {:?} {} {} @ {}",
@@ -393,16 +379,6 @@ impl<L: MarketListener> PaperTradingMarket<L> {
         if let Some(&current_price) = self.prices.get(&order.asset) {
             self.check_and_fill_orders(&order.asset, current_price);
         }
-    }
-
-    /// Place a buy order (convenience method)
-    pub fn place_buy_order(&mut self, order: OrderRequest) {
-        self.place_order(order, OrderSide::Buy)
-    }
-
-    /// Place a sell order (convenience method)
-    pub fn place_sell_order(&mut self, order: OrderRequest) {
-        self.place_order(order, OrderSide::Sell)
     }
 
     /// Inject an external fill (M9)
@@ -533,8 +509,8 @@ mod tests {
 
     #[test]
     fn test_paper_order_should_fill_buy() {
-        let request = OrderRequest::new(100, "BTC", 1.0, 50000.0);
-        let order = PaperOrder::new(request, OrderSide::Buy);
+        let request = OrderRequest::buy(100, "BTC", 1.0, 50000.0);
+        let order = PaperOrder::new(request);
 
         // Buy should fill when price <= limit
         assert!(order.should_fill(49999.0)); // Below limit
@@ -544,8 +520,8 @@ mod tests {
 
     #[test]
     fn test_paper_order_should_fill_sell() {
-        let request = OrderRequest::new(200, "BTC", 1.0, 50000.0);
-        let order = PaperOrder::new(request, OrderSide::Sell);
+        let request = OrderRequest::sell(200, "BTC", 1.0, 50000.0);
+        let order = PaperOrder::new(request);
 
         // Sell should fill when price >= limit
         assert!(!order.should_fill(49999.0)); // Below limit
@@ -601,8 +577,8 @@ mod tests {
 
     #[test]
     fn test_paper_order_fill() {
-        let request = OrderRequest::new(300, "BTC", 2.0, 50000.0);
-        let mut order = PaperOrder::new(request, OrderSide::Buy);
+        let request = OrderRequest::buy(300, "BTC", 2.0, 50000.0);
+        let mut order = PaperOrder::new(request);
 
         assert_eq!(order.status, OrderStatus::Pending);
 
