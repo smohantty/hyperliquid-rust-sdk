@@ -92,8 +92,8 @@ impl<L: MarketListener> Market<L> {
 
     /// Place a new order (M8)
     ///
-    /// Accepts an order request, assigns a unique order ID, determines if
-    /// the order is fillable, and notifies the listener if filled.
+    /// Accepts an order request, assigns a unique order ID, and stores it as pending.
+    /// Fill logic is not handled here - use `execute_fill` to process fills.
     ///
     /// # Arguments
     /// * `order` - The order request
@@ -104,44 +104,37 @@ impl<L: MarketListener> Market<L> {
         let order_id = self.next_order_id;
         self.next_order_id += 1;
 
-        let mut internal_order = InternalOrder::new(order.clone());
-
-        // Check if order is immediately fillable
-        if let Some(&current_price) = self.prices.get(&order.asset) {
-            // Simple fill logic: if current price <= limit price, fill immediately
-            if current_price <= order.limit_price {
-                internal_order.fill(order.qty, current_price);
-
-                let fill = OrderFill::new(order_id, &order.asset, order.qty, current_price);
-
-                // Store order before notifying (in case listener queries status)
-                self.orders.insert(order_id, internal_order);
-
-                // M6: Synchronous notification
-                self.listener.on_order_filled(fill);
-
-                return order_id;
-            }
-        }
-
+        let internal_order = InternalOrder::new(order);
         self.orders.insert(order_id, internal_order);
         order_id
     }
 
     /// Inject an external fill (M9)
     ///
-    /// Accepts an externally described fill and immediately notifies the listener.
+    /// Accepts an externally described fill and updates order state.
+    /// Only notifies the listener when the order is fully filled.
     ///
     /// # Arguments
     /// * `fill` - The fill details
     pub fn execute_fill(&mut self, fill: OrderFill) {
         // Update order state if it exists
         if let Some(internal_order) = self.orders.get_mut(&fill.order_id) {
+            let was_active = internal_order.status.is_active();
             internal_order.fill(fill.qty, fill.price);
-        }
 
-        // M6: Synchronous notification (even if order doesn't exist)
-        self.listener.on_order_filled(fill);
+            // Only notify when order is fully filled
+            if was_active && matches!(internal_order.status, OrderStatus::Filled(_)) {
+                let complete_fill = OrderFill::new(
+                    fill.order_id,
+                    &internal_order.request.asset,
+                    internal_order.request.qty,     // Total order qty
+                    internal_order.avg_fill_price,  // Average fill price
+                );
+
+                // M6: Synchronous notification
+                self.listener.on_order_filled(complete_fill);
+            }
+        }
     }
 
     /// Query current price for an asset (M10)
@@ -239,7 +232,7 @@ mod tests {
     fn test_place_order_pending_m8() {
         let mut market = Market::new(RecordingListener::default());
 
-        // No price set, order should remain pending
+        // Orders are always placed as pending - fill logic is external
         let order = OrderRequest::new("BTC", 1.0, 50000.0);
         let order_id = market.place_order(order);
 
@@ -249,48 +242,29 @@ mod tests {
     }
 
     #[test]
-    fn test_place_order_immediate_fill_m8() {
+    fn test_place_order_always_pending_m8() {
         let mut market = Market::new(RecordingListener::default());
 
-        // Set price below limit
+        // Even with price set, place_order just stores as pending
+        // Fill logic is handled by concrete implementations
         market.update_price("BTC", 49000.0);
 
         let order = OrderRequest::new("BTC", 1.0, 50000.0);
         let order_id = market.place_order(order);
 
-        // Order should be filled immediately
-        assert_eq!(
-            market.order_status(order_id),
-            Some(OrderStatus::Filled(49000.0))
-        );
-        assert_eq!(market.listener().fills.len(), 1);
-        assert_eq!(market.listener().fills[0].order_id, order_id);
-        assert_eq!(market.listener().fills[0].price, 49000.0);
-    }
-
-    #[test]
-    fn test_place_order_price_above_limit_m8() {
-        let mut market = Market::new(RecordingListener::default());
-
-        // Set price above limit
-        market.update_price("BTC", 51000.0);
-
-        let order = OrderRequest::new("BTC", 1.0, 50000.0);
-        let order_id = market.place_order(order);
-
-        // Order should remain pending (price too high)
+        // Order should be pending - no automatic fill
         assert_eq!(market.order_status(order_id), Some(OrderStatus::Pending));
         assert!(market.listener().fills.is_empty());
     }
 
     #[test]
-    fn test_execute_fill_m9() {
+    fn test_execute_fill_partial_no_notify_m9() {
         let mut market = Market::new(RecordingListener::default());
 
         let order = OrderRequest::new("BTC", 2.0, 50000.0);
         let order_id = market.place_order(order);
 
-        // Inject partial fill
+        // Inject partial fill - should NOT notify listener
         let fill = OrderFill::new(order_id, "BTC", 1.0, 49500.0);
         market.execute_fill(fill);
 
@@ -298,9 +272,23 @@ mod tests {
             market.order_status(order_id),
             Some(OrderStatus::PartiallyFilled(1.0))
         );
-        assert_eq!(market.listener().fills.len(), 1);
+        // No notification on partial fill
+        assert!(market.listener().fills.is_empty());
+    }
 
-        // Inject remaining fill
+    #[test]
+    fn test_execute_fill_complete_notify_m9() {
+        let mut market = Market::new(RecordingListener::default());
+
+        let order = OrderRequest::new("BTC", 2.0, 50000.0);
+        let order_id = market.place_order(order);
+
+        // Inject partial fill - no notification
+        let fill = OrderFill::new(order_id, "BTC", 1.0, 49500.0);
+        market.execute_fill(fill);
+        assert!(market.listener().fills.is_empty());
+
+        // Inject remaining fill - NOW notify with complete order details
         let fill2 = OrderFill::new(order_id, "BTC", 1.0, 49600.0);
         market.execute_fill(fill2);
 
@@ -311,6 +299,12 @@ mod tests {
             }
             _ => panic!("Expected Filled status"),
         }
+
+        // Listener notified once with complete fill
+        assert_eq!(market.listener().fills.len(), 1);
+        assert_eq!(market.listener().fills[0].order_id, order_id);
+        assert_eq!(market.listener().fills[0].qty, 2.0); // Total qty
+        assert!((market.listener().fills[0].price - 49550.0).abs() < 0.01); // Avg price
     }
 
     #[test]
@@ -379,10 +373,15 @@ mod tests {
         // Immediately after update_price, listener should have the update
         assert_eq!(market.listener().price_updates.len(), 1);
 
-        market.update_price("BTC", 45000.0);
+        // Place order and fill it via execute_fill
         let order = OrderRequest::new("BTC", 1.0, 50000.0);
-        market.place_order(order);
-        // Immediately after place_order, if filled, listener should have the fill
+        let order_id = market.place_order(order);
+
+        // Execute a complete fill
+        let fill = OrderFill::new(order_id, "BTC", 1.0, 49000.0);
+        market.execute_fill(fill);
+
+        // Immediately after execute_fill completes the order, listener should have the fill
         assert_eq!(market.listener().fills.len(), 1);
     }
 }
