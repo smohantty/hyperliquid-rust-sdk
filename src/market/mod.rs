@@ -20,6 +20,14 @@
 //! - **M10**: `current_price` - Query last known price
 //! - **M11**: `order_status` - Query order status
 //!
+//! # Market Implementations
+//!
+//! | Implementation | Description |
+//! |---------------|-------------|
+//! | `Market` | In-memory market for testing |
+//! | `HyperliquidMarket` | Live trading on Hyperliquid exchange |
+//! | `PaperTradingMarket` | Paper trading with live price feeds |
+//!
 //! # Examples
 //!
 //! ## Basic Market (in-memory)
@@ -60,14 +68,40 @@
 //! // Start the event loop (runs indefinitely)
 //! market.start().await;
 //! ```
+//!
+//! ## Paper Trading Market (simulated fills with live prices)
+//!
+//! ```ignore
+//! use hyperliquid_rust_sdk::market::{
+//!     PaperTradingMarket, PaperTradingMarketInput, OrderRequest, OrderSide, NoOpListener
+//! };
+//! use hyperliquid_rust_sdk::BaseUrl;
+//!
+//! let input = PaperTradingMarketInput {
+//!     initial_balance: 10_000.0,
+//!     base_url: Some(BaseUrl::Mainnet),
+//!     wallet: None,
+//! };
+//!
+//! let mut market = PaperTradingMarket::new(input, NoOpListener).await?;
+//!
+//! // Place a simulated buy order - fills when midprice <= limit
+//! let order = OrderRequest::new("BTC", 0.1, 50000.0);
+//! let order_id = market.place_order(order, OrderSide::Buy);
+//!
+//! // Start event loop (orders fill when midprice crosses limit)
+//! market.start().await;
+//! ```
 
 mod hyperliquid_market;
 mod listener;
 mod market;
+mod paper_trading_market;
 mod types;
 
 pub use hyperliquid_market::{HyperliquidMarket, HyperliquidMarketInput};
 pub use listener::{MarketListener, NoOpListener};
 pub use market::Market;
+pub use paper_trading_market::{OrderSide, PaperPosition, PaperTradingMarket, PaperTradingMarketInput};
 pub use types::{OrderFill, OrderRequest, OrderStatus};
 
