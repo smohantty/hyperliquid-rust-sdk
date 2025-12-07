@@ -1,6 +1,6 @@
 //! Strategy trait definition
 
-use crate::market::{OrderFill, OrderRequest};
+use crate::market::OrderFill;
 
 use super::StrategyAction;
 
@@ -151,6 +151,7 @@ impl Strategy for NoOpStrategy {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::market::OrderRequest;
 
     #[test]
     fn test_noop_strategy() {

@@ -19,13 +19,14 @@
 //!
 //! struct SimpleStrategy {
 //!     has_position: bool,
+//!     next_order_id: u64,
 //! }
 //!
 //! impl Strategy for SimpleStrategy {
 //!     fn on_price_update(&mut self, asset: &str, price: f64) -> StrategyAction {
 //!         if !self.has_position && price < 50000.0 {
-//!             // Buy when price drops below threshold
-//!             StrategyAction::single(OrderRequest::buy(1, asset, 0.1, price))
+//!             self.next_order_id += 1;
+//!             StrategyAction::single(OrderRequest::buy(self.next_order_id, asset, 0.1, price))
 //!         } else {
 //!             StrategyAction::none()
 //!         }
@@ -38,23 +39,36 @@
 //! }
 //! ```
 //!
-//! # Connecting Strategy to Market
+//! # Usage with a Bot
 //!
-//! Use `StrategyAdapter` to bridge a strategy to a market:
+//! The bot owns the strategy and calls it from MarketListener callbacks:
 //!
 //! ```ignore
-//! use hyperliquid_rust_sdk::strategy::StrategyAdapter;
+//! struct Bot {
+//!     strategy: MyStrategy,
+//!     market: HyperliquidMarket<Self>,
+//! }
 //!
-//! let strategy = MyStrategy::new();
-//! let adapter = StrategyAdapter::new(strategy);
-//! let market = HyperliquidMarket::new(input, adapter).await?;
+//! impl MarketListener for Bot {
+//!     fn on_price_update(&mut self, asset: &str, price: f64) {
+//!         let action = self.strategy.on_price_update(asset, price);
+//!         for order in action {
+//!             self.market.place_order(order);
+//!         }
+//!     }
+//!
+//!     fn on_order_filled(&mut self, fill: OrderFill) {
+//!         let action = self.strategy.on_order_filled(&fill);
+//!         for order in action {
+//!             self.market.place_order(order);
+//!         }
+//!     }
+//! }
 //! ```
 
 mod action;
-mod adapter;
 mod traits;
 
 pub use action::StrategyAction;
-pub use adapter::{shared_adapter, SharedStrategyAdapter, StrategyAdapter};
 pub use traits::{NoOpStrategy, Strategy};
 
