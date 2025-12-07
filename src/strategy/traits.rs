@@ -1,6 +1,92 @@
 //! Strategy trait definition
 
 use crate::market::{OrderFill, OrderRequest};
+use serde::{Deserialize, Serialize};
+
+/// Strategy status for monitoring and display
+///
+/// Contains common fields that most strategies want to expose.
+/// Strategies can extend this with custom data in the `custom` field.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct StrategyStatus {
+    /// Strategy name
+    pub name: String,
+    /// Current status description (e.g., "Running", "WaitingForEntry")
+    pub status: String,
+    /// Current asset being traded
+    pub asset: String,
+    /// Current price
+    pub current_price: f64,
+    /// Current position size
+    pub position: f64,
+    /// Realized PnL
+    pub realized_pnl: f64,
+    /// Unrealized PnL
+    pub unrealized_pnl: f64,
+    /// Total fees paid
+    pub total_fees: f64,
+    /// Number of completed trades (round trips)
+    pub trade_count: u32,
+    /// Active order count
+    pub active_orders: usize,
+    /// Strategy-specific custom data (JSON)
+    #[serde(default)]
+    pub custom: serde_json::Value,
+}
+
+impl StrategyStatus {
+    /// Create a new status with basic info
+    pub fn new(name: impl Into<String>, asset: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            asset: asset.into(),
+            status: "Initialized".to_string(),
+            ..Default::default()
+        }
+    }
+
+    /// Net profit (realized PnL - fees)
+    pub fn net_profit(&self) -> f64 {
+        self.realized_pnl - self.total_fees
+    }
+
+    /// Total PnL (realized + unrealized - fees)
+    pub fn total_pnl(&self) -> f64 {
+        self.realized_pnl + self.unrealized_pnl - self.total_fees
+    }
+
+    /// Builder: set status
+    pub fn with_status(mut self, status: impl Into<String>) -> Self {
+        self.status = status.into();
+        self
+    }
+
+    /// Builder: set price
+    pub fn with_price(mut self, price: f64) -> Self {
+        self.current_price = price;
+        self
+    }
+
+    /// Builder: set position
+    pub fn with_position(mut self, position: f64) -> Self {
+        self.position = position;
+        self
+    }
+
+    /// Builder: set PnL values
+    pub fn with_pnl(mut self, realized: f64, unrealized: f64, fees: f64) -> Self {
+        self.realized_pnl = realized;
+        self.unrealized_pnl = unrealized;
+        self.total_fees = fees;
+        self
+    }
+
+    /// Builder: set custom data
+    pub fn with_custom(mut self, custom: serde_json::Value) -> Self {
+        self.custom = custom;
+        self
+    }
+}
 
 /// Strategy interface for trading logic
 ///
@@ -120,6 +206,37 @@ pub trait Strategy {
     fn name(&self) -> &str {
         "unnamed_strategy"
     }
+
+    /// Get the strategy's current status for monitoring
+    ///
+    /// Returns a `StrategyStatus` containing common metrics like PnL, position,
+    /// active orders, etc. Override this to provide strategy-specific data.
+    ///
+    /// This is called periodically by the bot to update dashboards/APIs.
+    fn status(&self) -> StrategyStatus {
+        StrategyStatus::new(self.name(), "")
+    }
+
+    /// Render a custom HTML dashboard (optional)
+    ///
+    /// Override this to provide a custom HTML dashboard for the strategy.
+    /// If `None` is returned, a default dashboard will be generated from `status()`.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// fn render_dashboard(&self) -> Option<String> {
+    ///     Some(format!(r#"
+    ///         <div class="my-strategy">
+    ///             <h1>{}</h1>
+    ///             <p>Position: {}</p>
+    ///         </div>
+    ///     "#, self.name(), self.position))
+    /// }
+    /// ```
+    fn render_dashboard(&self) -> Option<String> {
+        None
+    }
 }
 
 /// A no-op strategy that never generates orders
@@ -158,6 +275,58 @@ mod tests {
         assert!(orders.is_empty());
 
         assert_eq!(strategy.name(), "noop");
+    }
+
+    #[test]
+    fn test_strategy_status() {
+        let status = StrategyStatus::new("TestStrategy", "BTC")
+            .with_status("Running")
+            .with_price(50000.0)
+            .with_position(1.5)
+            .with_pnl(100.0, 50.0, 10.0);
+
+        assert_eq!(status.name, "TestStrategy");
+        assert_eq!(status.asset, "BTC");
+        assert_eq!(status.status, "Running");
+        assert_eq!(status.current_price, 50000.0);
+        assert_eq!(status.position, 1.5);
+        assert_eq!(status.realized_pnl, 100.0);
+        assert_eq!(status.unrealized_pnl, 50.0);
+        assert_eq!(status.total_fees, 10.0);
+        assert!((status.net_profit() - 90.0).abs() < 0.001);
+        assert!((status.total_pnl() - 140.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_strategy_status_custom_data() {
+        let custom = serde_json::json!({
+            "grid_levels": 10,
+            "lower_price": 45000.0,
+            "upper_price": 55000.0
+        });
+
+        let status = StrategyStatus::new("GridStrategy", "BTC").with_custom(custom);
+
+        assert!(status.custom.get("grid_levels").is_some());
+        assert_eq!(status.custom["grid_levels"], 10);
+    }
+
+    #[test]
+    fn test_default_status() {
+        let strategy = NoOpStrategy;
+        let status = strategy.status();
+
+        assert_eq!(status.name, "noop");
+        assert!(status.asset.is_empty());
+    }
+
+    #[test]
+    fn test_default_render_dashboard() {
+        let strategy = NoOpStrategy;
+        let dashboard = strategy.render_dashboard();
+
+        // Default returns None
+        assert!(dashboard.is_none());
     }
 
     // Example: Simple threshold strategy for testing

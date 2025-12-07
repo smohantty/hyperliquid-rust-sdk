@@ -66,5 +66,5 @@
 
 mod traits;
 
-pub use traits::{NoOpStrategy, Strategy};
+pub use traits::{NoOpStrategy, Strategy, StrategyStatus};
 
