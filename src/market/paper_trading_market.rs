@@ -4,9 +4,10 @@
 //! locally by checking midprice against pending order limits.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use log::{error, info};
-use tokio::sync::mpsc::unbounded_channel;
+use tokio::sync::{mpsc::unbounded_channel, RwLock};
 
 use super::listener::MarketListener;
 use super::types::{AssetInfo, OrderFill, OrderRequest, OrderSide, OrderStatus};
@@ -162,25 +163,25 @@ impl PaperPosition {
 /// - Simulated order matching against midprice
 /// - Position and PnL tracking
 /// - No real money at risk
+/// - Shared listener for external access (e.g., HTTP dashboards)
 ///
 /// # Example
 ///
 /// ```ignore
+/// use std::sync::Arc;
+/// use tokio::sync::RwLock;
 /// use hyperliquid_rust_sdk::market::{
-///     PaperTradingMarket, PaperTradingMarketInput, NoOpListener, OrderRequest
+///     PaperTradingMarket, PaperTradingMarketInput, OrderRequest
 /// };
+/// use hyperliquid_rust_sdk::bot::Bot;
 ///
+/// let bot = Arc::new(RwLock::new(Bot::new(my_strategy)));
 /// let input = PaperTradingMarketInput::new("HYPE/USDC", 10_000.0);
 ///
-/// let mut market = PaperTradingMarket::new(input, NoOpListener).await?;
+/// let mut market = PaperTradingMarket::new(input, bot.clone()).await?;
 ///
-/// // Query asset info (precision cached at construction)
-/// let info = market.asset_info();
-/// println!("Size decimals: {}", info.sz_decimals);
-///
-/// // Place a simulated buy order
-/// let order = OrderRequest::buy(1, "HYPE/USDC", 0.1, 25.0);
-/// market.place_order(order);
+/// // bot.clone() can also be used by HTTP server for status
+/// // start_http_server(bot.clone());
 ///
 /// // Start event loop - orders fill when midprice crosses limit
 /// market.start().await;
@@ -190,8 +191,8 @@ pub struct PaperTradingMarket<L: MarketListener> {
     pub asset: String,
     /// Cached asset info (precision is static, balances are paper)
     asset_info: AssetInfo,
-    /// Owned listener instance (M5)
-    listener: L,
+    /// Shared listener instance for external access
+    listener: Arc<RwLock<L>>,
     /// Info client for price feeds
     pub info_client: InfoClient,
     /// Current prices by asset
@@ -215,8 +216,8 @@ impl<L: MarketListener> PaperTradingMarket<L> {
     ///
     /// # Arguments
     /// * `input` - Configuration for the paper trading market
-    /// * `listener` - Listener to receive notifications
-    pub async fn new(input: PaperTradingMarketInput, listener: L) -> Result<Self, crate::Error> {
+    /// * `listener` - Shared listener wrapped in Arc<RwLock<L>>
+    pub async fn new(input: PaperTradingMarketInput, listener: Arc<RwLock<L>>) -> Result<Self, crate::Error> {
         // Paper trading always uses Mainnet for real price data
         let info_client = InfoClient::new(None, Some(BaseUrl::Mainnet)).await?;
 
@@ -325,8 +326,10 @@ impl<L: MarketListener> PaperTradingMarket<L> {
                     // Only notify if price actually changed
                     if old_price != Some(price) {
                         // M6: Synchronous notification, collect returned orders
-                        let orders = self.listener.on_price_update(&asset, price);
-                        pending_orders.extend(orders);
+                        if let Ok(mut listener) = self.listener.try_write() {
+                            let orders = listener.on_price_update(&asset, price);
+                            pending_orders.extend(orders);
+                        }
                     }
 
                     // Check pending orders for this asset, collect any returned orders
@@ -413,7 +416,9 @@ impl<L: MarketListener> PaperTradingMarket<L> {
                 );
 
                 // M6: Synchronous notification, return orders to place
-                return self.listener.on_order_filled(fill);
+                if let Ok(mut listener) = self.listener.try_write() {
+                    return listener.on_order_filled(fill);
+                }
             }
         }
 
@@ -460,7 +465,11 @@ impl<L: MarketListener> PaperTradingMarket<L> {
         self.prices.insert(asset.to_string(), price);
 
         // M6: Synchronous notification, collect returned orders
-        let mut pending_orders = self.listener.on_price_update(asset, price);
+        let mut pending_orders = if let Ok(mut listener) = self.listener.try_write() {
+            listener.on_price_update(asset, price)
+        } else {
+            vec![]
+        };
 
         // Check for fills, collect returned orders
         let fill_orders = self.check_and_fill_orders(asset, price);
@@ -505,7 +514,11 @@ impl<L: MarketListener> PaperTradingMarket<L> {
                 );
 
                 // M6: Synchronous notification, collect returned orders
-                let pending_orders = self.listener.on_order_filled(complete_fill);
+                let pending_orders = if let Ok(mut listener) = self.listener.try_write() {
+                    listener.on_order_filled(complete_fill)
+                } else {
+                    vec![]
+                };
                 self.place_pending_orders(pending_orders);
             }
         }
@@ -521,14 +534,12 @@ impl<L: MarketListener> PaperTradingMarket<L> {
         self.orders.get(&order_id).map(|o| o.status)
     }
 
-    /// Get a reference to the listener
-    pub fn listener(&self) -> &L {
-        &self.listener
-    }
-
-    /// Get a mutable reference to the listener
-    pub fn listener_mut(&mut self) -> &mut L {
-        &mut self.listener
+    /// Get the shared listener reference
+    ///
+    /// Returns the `Arc<RwLock<L>>` so callers can access the listener
+    /// for status queries, dashboards, etc.
+    pub fn listener(&self) -> Arc<RwLock<L>> {
+        self.listener.clone()
     }
 
     /// Cancel an order

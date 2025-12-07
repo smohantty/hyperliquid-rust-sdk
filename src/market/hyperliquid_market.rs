@@ -3,10 +3,11 @@
 //! Connects to the Hyperliquid exchange and implements the Market interface.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use alloy::{primitives::Address, signers::local::PrivateKeySigner};
 use log::{debug, error, info};
-use tokio::sync::mpsc::unbounded_channel;
+use tokio::sync::{mpsc::unbounded_channel, RwLock};
 
 use super::listener::MarketListener;
 use super::types::{AssetInfo, OrderFill, OrderRequest, OrderStatus};
@@ -77,15 +78,20 @@ impl TrackedOrder {
 /// # Example
 ///
 /// ```ignore
-/// use hyperliquid_rust_sdk::market::{HyperliquidMarket, HyperliquidMarketInput, NoOpListener};
+/// use std::sync::Arc;
+/// use tokio::sync::RwLock;
+/// use hyperliquid_rust_sdk::market::{HyperliquidMarket, HyperliquidMarketInput};
+/// use hyperliquid_rust_sdk::bot::Bot;
 ///
+/// let bot = Arc::new(RwLock::new(Bot::new(my_strategy)));
 /// let input = HyperliquidMarketInput {
 ///     asset: "BTC".to_string(),
 ///     wallet: wallet,
 ///     base_url: Some(BaseUrl::Testnet),
 /// };
 ///
-/// let mut market = HyperliquidMarket::new(input, NoOpListener).await;
+/// let mut market = HyperliquidMarket::new(input, bot.clone()).await?;
+/// // bot can also be used by HTTP server
 /// market.start().await;
 /// ```
 pub struct HyperliquidMarket<L: MarketListener> {
@@ -93,8 +99,8 @@ pub struct HyperliquidMarket<L: MarketListener> {
     pub asset: String,
     /// Cached asset info (balances and precision)
     asset_info: AssetInfo,
-    /// Owned listener instance (M5)
-    listener: L,
+    /// Shared listener instance for external access
+    listener: Arc<RwLock<L>>,
     /// Info client for market data
     pub info_client: InfoClient,
     /// Exchange client for order management
@@ -114,10 +120,10 @@ impl<L: MarketListener> HyperliquidMarket<L> {
     ///
     /// # Arguments
     /// * `input` - Configuration for the market
-    /// * `listener` - Listener to receive notifications
+    /// * `listener` - Shared listener wrapped in Arc<RwLock<L>>
     pub async fn new(
         input: HyperliquidMarketInput,
-        listener: L,
+        listener: Arc<RwLock<L>>,
     ) -> Result<Self, crate::Error> {
         let user_address = input.wallet.address();
         let base_url = input.base_url.unwrap_or(BaseUrl::Mainnet);
@@ -298,8 +304,10 @@ impl<L: MarketListener> HyperliquidMarket<L> {
                         // Update internal price state (M1)
                         self.prices.insert(asset.clone(), price);
                         // M6: Synchronous notification, collect returned orders
-                        let orders = self.listener.on_price_update(&asset, price);
-                        pending_orders.extend(orders);
+                        if let Ok(mut listener) = self.listener.try_write() {
+                            let orders = listener.on_price_update(&asset, price);
+                            pending_orders.extend(orders);
+                        }
                     }
                 }
             }
@@ -344,8 +352,10 @@ impl<L: MarketListener> HyperliquidMarket<L> {
                                     );
 
                                     // M6: Synchronous notification, collect returned orders
-                                    let orders = self.listener.on_order_filled(order_fill);
-                                    pending_orders.extend(orders);
+                                    if let Ok(mut listener) = self.listener.try_write() {
+                                        let orders = listener.on_order_filled(order_fill);
+                                        pending_orders.extend(orders);
+                                    }
                                 }
                             }
                         } else {
@@ -378,7 +388,11 @@ impl<L: MarketListener> HyperliquidMarket<L> {
     pub fn update_price(&mut self, asset: &str, price: f64) -> Vec<OrderRequest> {
         self.prices.insert(asset.to_string(), price);
         // M6: Synchronous notification, return orders to place
-        self.listener.on_price_update(asset, price)
+        if let Ok(mut listener) = self.listener.try_write() {
+            listener.on_price_update(asset, price)
+        } else {
+            vec![]
+        }
     }
 
     /// Place a new order on Hyperliquid (M8)
@@ -427,7 +441,11 @@ impl<L: MarketListener> HyperliquidMarket<L> {
                                     self.orders.insert(user_order_id, tracked_order);
 
                                     // M6: Synchronous notification, place returned orders
-                                    let pending_orders = self.listener.on_order_filled(fill);
+                                    let pending_orders = if let Ok(mut listener) = self.listener.try_write() {
+                                        listener.on_order_filled(fill)
+                                    } else {
+                                        vec![]
+                                    };
                                     for pending in pending_orders {
                                         // Recursive call for orders returned by listener
                                         Box::pin(self.place_order(pending)).await;
@@ -494,7 +512,9 @@ impl<L: MarketListener> HyperliquidMarket<L> {
                 );
 
                 // M6: Synchronous notification, return orders to place
-                return self.listener.on_order_filled(complete_fill);
+                if let Ok(mut listener) = self.listener.try_write() {
+                    return listener.on_order_filled(complete_fill);
+                }
             }
         }
         vec![]
@@ -522,14 +542,12 @@ impl<L: MarketListener> HyperliquidMarket<L> {
         self.orders.get(&order_id).map(|o| o.status)
     }
 
-    /// Get a reference to the listener
-    pub fn listener(&self) -> &L {
-        &self.listener
-    }
-
-    /// Get a mutable reference to the listener
-    pub fn listener_mut(&mut self) -> &mut L {
-        &mut self.listener
+    /// Get the shared listener reference
+    ///
+    /// Returns the `Arc<RwLock<L>>` so callers can access the listener
+    /// for status queries, dashboards, etc.
+    pub fn listener(&self) -> Arc<RwLock<L>> {
+        self.listener.clone()
     }
 
     /// Cancel an order

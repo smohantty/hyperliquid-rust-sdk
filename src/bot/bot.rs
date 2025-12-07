@@ -139,7 +139,7 @@ pub fn render_default_dashboard(status: &StrategyStatus) -> String {
             min-height: 100vh;
         }}
         .container {{ max-width: 1200px; margin: 0 auto; padding: 24px; }}
-        
+
         header {{
             display: flex;
             justify-content: space-between;
