@@ -1,19 +1,19 @@
 //! Market implementation
 //!
-//! Core market implementation that manages prices, orders, and notifies listeners.
+//! Base market implementation for order storage and listener notifications.
+//! This is a simple container - concrete implementations handle fill logic.
 
 use std::collections::HashMap;
 
 use super::listener::MarketListener;
 use super::types::{OrderFill, OrderRequest, OrderStatus};
 
-/// Internal order tracking
+/// Internal order tracking - simple status only
 #[derive(Debug, Clone)]
 struct InternalOrder {
+    #[allow(dead_code)]
     request: OrderRequest,
     status: OrderStatus,
-    filled_qty: f64,
-    avg_fill_price: f64,
 }
 
 impl InternalOrder {
@@ -21,24 +21,6 @@ impl InternalOrder {
         Self {
             request,
             status: OrderStatus::Pending,
-            filled_qty: 0.0,
-            avg_fill_price: 0.0,
-        }
-    }
-
-    fn fill(&mut self, qty: f64, price: f64) {
-        let total_value = self.avg_fill_price * self.filled_qty + price * qty;
-        self.filled_qty += qty;
-        self.avg_fill_price = if self.filled_qty > 0.0 {
-            total_value / self.filled_qty
-        } else {
-            0.0
-        };
-
-        if self.filled_qty >= self.request.qty {
-            self.status = OrderStatus::Filled(self.avg_fill_price);
-        } else {
-            self.status = OrderStatus::PartiallyFilled(self.filled_qty);
         }
     }
 }
@@ -109,30 +91,23 @@ impl<L: MarketListener> Market<L> {
         order_id
     }
 
-    /// Inject an external fill (M9)
+    /// Mark order as filled and notify listener (M9)
     ///
-    /// Accepts an externally described fill and updates order state.
-    /// Only notifies the listener when the order is fully filled.
+    /// Called by concrete implementations when an order is completely filled.
+    /// The fill contains the final quantity and price (concrete implementations
+    /// handle partial fill tracking internally).
     ///
     /// # Arguments
-    /// * `fill` - The fill details
+    /// * `fill` - The complete fill details (qty = total filled, price = final price)
     pub fn execute_fill(&mut self, fill: OrderFill) {
         // Update order state if it exists
         if let Some(internal_order) = self.orders.get_mut(&fill.order_id) {
-            let was_active = internal_order.status.is_active();
-            internal_order.fill(fill.qty, fill.price);
-
-            // Only notify when order is fully filled
-            if was_active && matches!(internal_order.status, OrderStatus::Filled(_)) {
-                let complete_fill = OrderFill::new(
-                    fill.order_id,
-                    &internal_order.request.asset,
-                    internal_order.request.qty,     // Total order qty
-                    internal_order.avg_fill_price,  // Average fill price
-                );
+            if internal_order.status.is_active() {
+                // Mark as filled with the provided price
+                internal_order.status = OrderStatus::Filled(fill.price);
 
                 // M6: Synchronous notification
-                self.listener.on_order_filled(complete_fill);
+                self.listener.on_order_filled(fill);
             }
         }
     }
@@ -258,53 +233,51 @@ mod tests {
     }
 
     #[test]
-    fn test_execute_fill_partial_no_notify_m9() {
+    fn test_execute_fill_m9() {
         let mut market = Market::new(RecordingListener::default());
 
-        let order = OrderRequest::new("BTC", 2.0, 50000.0);
+        let order = OrderRequest::new("BTC", 1.0, 50000.0);
         let order_id = market.place_order(order);
 
-        // Inject partial fill - should NOT notify listener
+        // Execute fill - marks as filled and notifies
         let fill = OrderFill::new(order_id, "BTC", 1.0, 49500.0);
         market.execute_fill(fill);
 
+        // Order should be filled at the provided price
         assert_eq!(
             market.order_status(order_id),
-            Some(OrderStatus::PartiallyFilled(1.0))
+            Some(OrderStatus::Filled(49500.0))
         );
-        // No notification on partial fill
-        assert!(market.listener().fills.is_empty());
+
+        // Listener was notified
+        assert_eq!(market.listener().fills.len(), 1);
+        assert_eq!(market.listener().fills[0].order_id, order_id);
+        assert_eq!(market.listener().fills[0].qty, 1.0);
+        assert_eq!(market.listener().fills[0].price, 49500.0);
     }
 
     #[test]
-    fn test_execute_fill_complete_notify_m9() {
+    fn test_execute_fill_already_filled_m9() {
         let mut market = Market::new(RecordingListener::default());
 
-        let order = OrderRequest::new("BTC", 2.0, 50000.0);
+        let order = OrderRequest::new("BTC", 1.0, 50000.0);
         let order_id = market.place_order(order);
 
-        // Inject partial fill - no notification
-        let fill = OrderFill::new(order_id, "BTC", 1.0, 49500.0);
-        market.execute_fill(fill);
-        assert!(market.listener().fills.is_empty());
+        // First fill
+        let fill1 = OrderFill::new(order_id, "BTC", 1.0, 49500.0);
+        market.execute_fill(fill1);
+        assert_eq!(market.listener().fills.len(), 1);
 
-        // Inject remaining fill - NOW notify with complete order details
-        let fill2 = OrderFill::new(order_id, "BTC", 1.0, 49600.0);
+        // Second fill on same order - should be ignored (already filled)
+        let fill2 = OrderFill::new(order_id, "BTC", 1.0, 49000.0);
         market.execute_fill(fill2);
 
-        // Should now be fully filled with average price
-        match market.order_status(order_id) {
-            Some(OrderStatus::Filled(avg_price)) => {
-                assert!((avg_price - 49550.0).abs() < 0.01);
-            }
-            _ => panic!("Expected Filled status"),
-        }
-
-        // Listener notified once with complete fill
+        // Still only one notification, status unchanged
         assert_eq!(market.listener().fills.len(), 1);
-        assert_eq!(market.listener().fills[0].order_id, order_id);
-        assert_eq!(market.listener().fills[0].qty, 2.0); // Total qty
-        assert!((market.listener().fills[0].price - 49550.0).abs() < 0.01); // Avg price
+        assert_eq!(
+            market.order_status(order_id),
+            Some(OrderStatus::Filled(49500.0))
+        );
     }
 
     #[test]
