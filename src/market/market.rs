@@ -58,15 +58,20 @@ impl<L: MarketListener> Market<L> {
 
     /// Update the price for an asset (M7)
     ///
-    /// Updates internal price state and synchronously notifies the listener.
+    /// Updates internal price state, notifies the listener, and places any
+    /// orders returned by the listener.
     ///
     /// # Arguments
     /// * `asset` - The asset identifier
     /// * `price` - The new price
     pub fn update_price(&mut self, asset: &str, price: f64) {
         self.prices.insert(asset.to_string(), price);
-        // M6: Synchronous notification
-        self.listener.on_price_update(asset, price);
+        // M6: Synchronous notification, listener returns orders to place
+        let orders = self.listener.on_price_update(asset, price);
+        // Place returned orders
+        for order in orders {
+            self.place_order(order);
+        }
     }
 
     /// Place a new order (M8)
@@ -97,8 +102,12 @@ impl<L: MarketListener> Market<L> {
                 // Mark as filled with the provided price
                 internal_order.status = OrderStatus::Filled(fill.price);
 
-                // M6: Synchronous notification
-                self.listener.on_order_filled(fill);
+                // M6: Synchronous notification, listener returns orders to place
+                let orders = self.listener.on_order_filled(fill);
+                // Place returned orders
+                for order in orders {
+                    self.place_order(order);
+                }
             }
         }
     }
@@ -158,6 +167,8 @@ mod tests {
     use super::*;
     use crate::market::listener::NoOpListener;
 
+    use crate::market::OrderRequest;
+
     #[derive(Default)]
     struct RecordingListener {
         fills: Vec<OrderFill>,
@@ -165,12 +176,14 @@ mod tests {
     }
 
     impl MarketListener for RecordingListener {
-        fn on_order_filled(&mut self, fill: OrderFill) {
+        fn on_order_filled(&mut self, fill: OrderFill) -> Vec<OrderRequest> {
             self.fills.push(fill);
+            vec![]
         }
 
-        fn on_price_update(&mut self, asset: &str, price: f64) {
+        fn on_price_update(&mut self, asset: &str, price: f64) -> Vec<OrderRequest> {
             self.price_updates.push((asset.to_string(), price));
+            vec![]
         }
     }
 

@@ -1,7 +1,8 @@
 //! Bot Module
 //!
 //! The Bot is a MarketListener that wraps a Strategy.
-//! It receives market events, calls the strategy, and collects orders to execute.
+//! It receives market events, calls the strategy, and returns orders to place.
+//! The market automatically places orders returned by the listener callbacks.
 //!
 //! # Usage Pattern
 //!
@@ -19,8 +20,8 @@
 //! // Create market with bot as listener
 //! let mut market = HyperliquidMarket::new(input, bot).await?;
 //!
-//! // Market runs event loop, bot receives callbacks
-//! // After processing, get pending orders from bot and place them
+//! // Market runs event loop, bot receives callbacks and returns orders
+//! // Market automatically places orders returned by the listener
 //! market.start().await;
 //! ```
 

@@ -234,7 +234,8 @@ impl<L: MarketListener> HyperliquidMarket<L> {
     /// Start the market event loop
     ///
     /// Subscribes to AllMids (price updates) and UserEvents (fills)
-    /// and processes them in a loop.
+    /// and processes them in a loop. Orders returned by the listener
+    /// are automatically placed.
     pub async fn start(&mut self) {
         let (sender, mut receiver) = unbounded_channel();
 
@@ -267,7 +268,15 @@ impl<L: MarketListener> HyperliquidMarket<L> {
 
         loop {
             match receiver.recv().await {
-                Some(message) => self.handle_message(message),
+                Some(message) => {
+                    // Process message and get orders to place
+                    let pending_orders = self.handle_message(message);
+
+                    // Place orders returned by listener
+                    for order in pending_orders {
+                        self.place_order(order).await;
+                    }
+                }
                 None => {
                     error!("Channel closed");
                     break;
@@ -277,7 +286,10 @@ impl<L: MarketListener> HyperliquidMarket<L> {
     }
 
     /// Handle incoming WebSocket messages
-    fn handle_message(&mut self, message: Message) {
+    /// Returns orders that need to be placed (from listener callbacks)
+    fn handle_message(&mut self, message: Message) -> Vec<OrderRequest> {
+        let mut pending_orders = Vec::new();
+
         match message {
             Message::AllMids(all_mids) => {
                 let mids = all_mids.data.mids;
@@ -285,8 +297,9 @@ impl<L: MarketListener> HyperliquidMarket<L> {
                     if let Ok(price) = price_str.parse::<f64>() {
                         // Update internal price state (M1)
                         self.prices.insert(asset.clone(), price);
-                        // M6: Synchronous notification (M4)
-                        self.listener.on_price_update(&asset, price);
+                        // M6: Synchronous notification, collect returned orders
+                        let orders = self.listener.on_price_update(&asset, price);
+                        pending_orders.extend(orders);
                     }
                 }
             }
@@ -330,8 +343,9 @@ impl<L: MarketListener> HyperliquidMarket<L> {
                                         user_order_id, order.request.qty, fill.coin, order.avg_fill_price
                                     );
 
-                                    // M6: Synchronous notification
-                                    self.listener.on_order_filled(order_fill);
+                                    // M6: Synchronous notification, collect returned orders
+                                    let orders = self.listener.on_order_filled(order_fill);
+                                    pending_orders.extend(orders);
                                 }
                             }
                         } else {
@@ -345,20 +359,26 @@ impl<L: MarketListener> HyperliquidMarket<L> {
                 debug!("Received unhandled message type");
             }
         }
+
+        pending_orders
     }
 
     /// Update the price for an asset (M7)
     ///
     /// Manually updates internal price state and notifies the listener.
+    /// Returns orders that the listener wants to place.
     /// Note: Prices are also updated automatically via WebSocket subscription.
     ///
     /// # Arguments
     /// * `asset` - The asset identifier
     /// * `price` - The new price
-    pub fn update_price(&mut self, asset: &str, price: f64) {
+    ///
+    /// # Returns
+    /// Orders to place (caller should place them with `place_order`)
+    pub fn update_price(&mut self, asset: &str, price: f64) -> Vec<OrderRequest> {
         self.prices.insert(asset.to_string(), price);
-        // M6: Synchronous notification
-        self.listener.on_price_update(asset, price);
+        // M6: Synchronous notification, return orders to place
+        self.listener.on_price_update(asset, price)
     }
 
     /// Place a new order on Hyperliquid (M8)
@@ -406,8 +426,12 @@ impl<L: MarketListener> HyperliquidMarket<L> {
                                     // Store order before notifying
                                     self.orders.insert(user_order_id, tracked_order);
 
-                                    // M6: Synchronous notification
-                                    self.listener.on_order_filled(fill);
+                                    // M6: Synchronous notification, place returned orders
+                                    let pending_orders = self.listener.on_order_filled(fill);
+                                    for pending in pending_orders {
+                                        // Recursive call for orders returned by listener
+                                        Box::pin(self.place_order(pending)).await;
+                                    }
 
                                     return;
                                 }
@@ -447,10 +471,14 @@ impl<L: MarketListener> HyperliquidMarket<L> {
     ///
     /// Accepts an externally described fill and updates order state.
     /// Only notifies the listener when the order is fully filled.
+    /// Returns orders that the listener wants to place.
     ///
     /// # Arguments
     /// * `fill` - The fill details (order_id is user-provided)
-    pub fn execute_fill(&mut self, fill: OrderFill) {
+    ///
+    /// # Returns
+    /// Orders to place (caller should place them with `place_order`)
+    pub fn execute_fill(&mut self, fill: OrderFill) -> Vec<OrderRequest> {
         // Update order state if it exists
         if let Some(order) = self.orders.get_mut(&fill.order_id) {
             let was_active = order.status.is_active();
@@ -465,10 +493,11 @@ impl<L: MarketListener> HyperliquidMarket<L> {
                     order.avg_fill_price,   // Average fill price
                 );
 
-                // M6: Synchronous notification
-                self.listener.on_order_filled(complete_fill);
+                // M6: Synchronous notification, return orders to place
+                return self.listener.on_order_filled(complete_fill);
             }
         }
+        vec![]
     }
 
     /// Query current price for an asset (M10)

@@ -315,6 +315,8 @@ impl<L: MarketListener> PaperTradingMarket<L> {
     fn handle_message(&mut self, message: Message) {
         if let Message::AllMids(all_mids) = message {
             let mids = all_mids.data.mids;
+            let mut pending_orders: Vec<OrderRequest> = Vec::new();
+
             for (asset, price_str) in mids {
                 if let Ok(price) = price_str.parse::<f64>() {
                     let old_price = self.prices.get(&asset).copied();
@@ -322,19 +324,25 @@ impl<L: MarketListener> PaperTradingMarket<L> {
 
                     // Only notify if price actually changed
                     if old_price != Some(price) {
-                        // M6: Synchronous notification (M4)
-                        self.listener.on_price_update(&asset, price);
+                        // M6: Synchronous notification, collect returned orders
+                        let orders = self.listener.on_price_update(&asset, price);
+                        pending_orders.extend(orders);
                     }
 
-                    // Check pending orders for this asset
-                    self.check_and_fill_orders(&asset, price);
+                    // Check pending orders for this asset, collect any returned orders
+                    let fill_orders = self.check_and_fill_orders(&asset, price);
+                    pending_orders.extend(fill_orders);
                 }
             }
+
+            // Place orders returned by listener
+            self.place_pending_orders(pending_orders);
         }
     }
 
     /// Check all pending orders for an asset and fill if conditions are met
-    fn check_and_fill_orders(&mut self, asset: &str, mid_price: f64) {
+    /// Returns any orders the listener wants to place in response to fills
+    fn check_and_fill_orders(&mut self, asset: &str, mid_price: f64) -> Vec<OrderRequest> {
         // Collect orders to fill (can't modify while iterating)
         let orders_to_fill: Vec<u64> = self
             .orders
@@ -343,16 +351,20 @@ impl<L: MarketListener> PaperTradingMarket<L> {
             .map(|(&id, _)| id)
             .collect();
 
-        // Process fills
+        // Process fills, collect returned orders
+        let mut pending_orders = Vec::new();
         for order_id in orders_to_fill {
-            self.execute_paper_fill(order_id, mid_price);
+            let orders = self.execute_paper_fill(order_id, mid_price);
+            pending_orders.extend(orders);
         }
+        pending_orders
     }
 
     /// Execute a simulated fill
-    fn execute_paper_fill(&mut self, order_id: u64, price: f64) {
+    /// Returns any orders the listener wants to place in response
+    fn execute_paper_fill(&mut self, order_id: u64, price: f64) -> Vec<OrderRequest> {
         let Some(order) = self.orders.get(&order_id) else {
-            return;
+            return vec![];
         };
 
         let qty = order.request.qty - order.filled_qty;
@@ -400,29 +412,34 @@ impl<L: MarketListener> PaperTradingMarket<L> {
                     order_id, order.request.qty, asset, order.avg_fill_price
                 );
 
-                // M6: Synchronous notification
-                self.listener.on_order_filled(fill);
+                // M6: Synchronous notification, return orders to place
+                return self.listener.on_order_filled(fill);
+            }
+        }
+
+        vec![]
+    }
+
+    /// Place pending orders and any orders returned from fills
+    fn place_pending_orders(&mut self, orders: Vec<OrderRequest>) {
+        let mut pending = orders;
+        while !pending.is_empty() {
+            // Take current batch
+            let batch: Vec<OrderRequest> = std::mem::take(&mut pending);
+            for order in batch {
+                let order_asset = order.asset.clone();
+                self.place_order_internal(order);
+                // Check if this order can fill immediately, collect new orders
+                if let Some(&current_price) = self.prices.get(&order_asset) {
+                    let fill_orders = self.check_and_fill_orders(&order_asset, current_price);
+                    pending.extend(fill_orders);
+                }
             }
         }
     }
 
-    /// Update the price for an asset (M7)
-    ///
-    /// Manually updates internal price state and checks for fills.
-    /// Note: Prices are also updated automatically via WebSocket subscription.
-    pub fn update_price(&mut self, asset: &str, price: f64) {
-        self.prices.insert(asset.to_string(), price);
-        // M6: Synchronous notification
-        self.listener.on_price_update(asset, price);
-        // Check for fills
-        self.check_and_fill_orders(asset, price);
-    }
-
-    /// Place a new paper order (M8)
-    ///
-    /// # Arguments
-    /// * `order` - The order request (contains user-provided order_id, side, reduce_only, tif)
-    pub fn place_order(&mut self, order: OrderRequest) {
+    /// Internal place order (doesn't trigger immediate fill check cascade)
+    fn place_order_internal(&mut self, order: OrderRequest) {
         let user_order_id = order.order_id;
         let side = order.side;
         let paper_order = PaperOrder::new(order.clone());
@@ -433,10 +450,38 @@ impl<L: MarketListener> PaperTradingMarket<L> {
         );
 
         self.orders.insert(user_order_id, paper_order);
+    }
 
-        // Check if order can be filled immediately
-        if let Some(&current_price) = self.prices.get(&order.asset) {
-            self.check_and_fill_orders(&order.asset, current_price);
+    /// Update the price for an asset (M7)
+    ///
+    /// Manually updates internal price state and checks for fills.
+    /// Note: Prices are also updated automatically via WebSocket subscription.
+    pub fn update_price(&mut self, asset: &str, price: f64) {
+        self.prices.insert(asset.to_string(), price);
+
+        // M6: Synchronous notification, collect returned orders
+        let mut pending_orders = self.listener.on_price_update(asset, price);
+
+        // Check for fills, collect returned orders
+        let fill_orders = self.check_and_fill_orders(asset, price);
+        pending_orders.extend(fill_orders);
+
+        // Place all pending orders
+        self.place_pending_orders(pending_orders);
+    }
+
+    /// Place a new paper order (M8)
+    ///
+    /// # Arguments
+    /// * `order` - The order request (contains user-provided order_id, side, reduce_only, tif)
+    pub fn place_order(&mut self, order: OrderRequest) {
+        let asset = order.asset.clone();
+        self.place_order_internal(order);
+
+        // Check if order can be filled immediately, handle any returned orders
+        if let Some(&current_price) = self.prices.get(&asset) {
+            let pending_orders = self.check_and_fill_orders(&asset, current_price);
+            self.place_pending_orders(pending_orders);
         }
     }
 
@@ -459,8 +504,9 @@ impl<L: MarketListener> PaperTradingMarket<L> {
                     order.avg_fill_price,   // Average fill price
                 );
 
-                // M6: Synchronous notification
-                self.listener.on_order_filled(complete_fill);
+                // M6: Synchronous notification, collect returned orders
+                let pending_orders = self.listener.on_order_filled(complete_fill);
+                self.place_pending_orders(pending_orders);
             }
         }
     }
