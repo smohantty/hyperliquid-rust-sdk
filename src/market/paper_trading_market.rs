@@ -15,14 +15,18 @@ use crate::{BaseUrl, InfoClient, Message, Subscription};
 /// Input configuration for creating a PaperTradingMarket
 #[derive(Debug)]
 pub struct PaperTradingMarketInput {
+    /// Asset to trade (e.g., "BTC", "HYPE/USDC")
+    pub asset: String,
     /// Initial balance in quote currency (e.g., USDC)
     pub initial_balance: f64,
 }
 
-impl Default for PaperTradingMarketInput {
-    fn default() -> Self {
+impl PaperTradingMarketInput {
+    /// Create new input for paper trading
+    pub fn new(asset: impl Into<String>, initial_balance: f64) -> Self {
         Self {
-            initial_balance: 100_000.0,
+            asset: asset.into(),
+            initial_balance,
         }
     }
 }
@@ -166,20 +170,26 @@ impl PaperPosition {
 ///     PaperTradingMarket, PaperTradingMarketInput, NoOpListener, OrderRequest
 /// };
 ///
-/// let input = PaperTradingMarketInput {
-///     initial_balance: 10_000.0,
-/// };
+/// let input = PaperTradingMarketInput::new("HYPE/USDC", 10_000.0);
 ///
 /// let mut market = PaperTradingMarket::new(input, NoOpListener).await?;
 ///
+/// // Query asset info (precision cached at construction)
+/// let info = market.asset_info();
+/// println!("Size decimals: {}", info.sz_decimals);
+///
 /// // Place a simulated buy order
-/// let order = OrderRequest::buy(1, "BTC", 0.1, 50000.0);
+/// let order = OrderRequest::buy(1, "HYPE/USDC", 0.1, 25.0);
 /// market.place_order(order);
 ///
 /// // Start event loop - orders fill when midprice crosses limit
 /// market.start().await;
 /// ```
 pub struct PaperTradingMarket<L: MarketListener> {
+    /// Asset being traded
+    pub asset: String,
+    /// Cached asset info (precision is static, balances are paper)
+    asset_info: AssetInfo,
     /// Owned listener instance (M5)
     listener: L,
     /// Info client for price feeds
@@ -210,7 +220,12 @@ impl<L: MarketListener> PaperTradingMarket<L> {
         // Paper trading always uses Mainnet for real price data
         let info_client = InfoClient::new(None, Some(BaseUrl::Mainnet)).await?;
 
+        // Fetch precision from exchange (static data)
+        let asset_info = Self::fetch_precision(&info_client, &input.asset, input.initial_balance).await?;
+
         Ok(Self {
+            asset: input.asset,
+            asset_info,
             listener,
             info_client,
             prices: HashMap::new(),
@@ -220,6 +235,50 @@ impl<L: MarketListener> PaperTradingMarket<L> {
             total_fees: 0.0,
             fee_rate: 0.0001, // Default 0.01% fee
         })
+    }
+
+    /// Fetch precision from exchange (internal helper)
+    async fn fetch_precision(
+        info_client: &InfoClient,
+        asset: &str,
+        usdc_balance: f64,
+    ) -> Result<AssetInfo, crate::Error> {
+        let is_spot = asset.contains('/');
+
+        let (sz_decimals, price_decimals) = if is_spot {
+            let spot_meta = info_client.spot_meta().await?;
+            let base_name = asset.split('/').next().unwrap_or(asset);
+
+            let index_to_token: std::collections::HashMap<_, _> = spot_meta
+                .tokens
+                .iter()
+                .map(|t| (t.index, t))
+                .collect();
+
+            let mut found_sz = 4u32;
+            for spot_asset in &spot_meta.universe {
+                if let Some(token) = index_to_token.get(&spot_asset.tokens[0]) {
+                    if token.name == base_name || asset == spot_asset.name {
+                        found_sz = token.sz_decimals as u32;
+                        break;
+                    }
+                }
+            }
+
+            (found_sz, 6u32)
+        } else {
+            let meta = info_client.meta().await?;
+            let asset_meta = meta
+                .universe
+                .iter()
+                .find(|a| a.name == asset)
+                .ok_or_else(|| crate::Error::AssetNotFound)?;
+
+            (asset_meta.sz_decimals, 5u32)
+        };
+
+        // Paper trading starts with 0 base balance
+        Ok(AssetInfo::new(asset, 0.0, usdc_balance, sz_decimals, price_decimals))
     }
 
     /// Start the market event loop
@@ -502,72 +561,26 @@ impl<L: MarketListener> PaperTradingMarket<L> {
         info!("Paper trading reset with balance: {}", initial_balance);
     }
 
-    /// Query asset information including balances and precision
+    /// Get cached asset information (precision and current paper balances)
     ///
-    /// Returns paper trading balances combined with real precision from exchange.
-    ///
-    /// # Arguments
-    /// * `asset` - Asset to query (e.g., "BTC", "ETH", "HYPE/USDC")
-    ///
-    /// # Returns
-    /// `AssetInfo` with paper balances and real precision from exchange
-    pub async fn asset_info(&self, asset: &str) -> Result<AssetInfo, crate::Error> {
-        // Determine if this is a spot or perp asset
-        let is_spot = asset.contains('/');
+    /// Returns the cached AssetInfo with current paper trading balances.
+    /// Precision is fetched once at construction (static data from exchange).
+    pub fn asset_info(&self) -> &AssetInfo {
+        &self.asset_info
+    }
 
-        // Get paper trading balances
-        let base_balance = self
+    /// Get asset info with updated balances (mutable version)
+    ///
+    /// Updates the cached balances from current paper trading state.
+    pub fn asset_info_mut(&mut self) -> &AssetInfo {
+        // Update cached balances from current state
+        self.asset_info.balance = self
             .positions
-            .get(asset)
+            .get(&self.asset)
             .map(|p| p.size)
             .unwrap_or(0.0);
-
-        let usdc_balance = self.balance;
-
-        // Get precision from real exchange metadata
-        let (sz_decimals, price_decimals) = if is_spot {
-            let spot_meta = self.info_client.spot_meta().await?;
-            let base_name = asset.split('/').next().unwrap_or(asset);
-
-            // Build index to token mapping
-            let index_to_token: std::collections::HashMap<_, _> = spot_meta
-                .tokens
-                .iter()
-                .map(|t| (t.index, t))
-                .collect();
-
-            // Find the spot asset
-            let mut found_sz = 4u32;
-            for spot_asset in &spot_meta.universe {
-                if let Some(token) = index_to_token.get(&spot_asset.tokens[0]) {
-                    if token.name == base_name || asset == spot_asset.name {
-                        found_sz = token.sz_decimals as u32;
-                        break;
-                    }
-                }
-            }
-
-            // Spot assets typically use 6 decimals for USDC prices
-            (found_sz, 6u32)
-        } else {
-            let meta = self.info_client.meta().await?;
-            let asset_meta = meta
-                .universe
-                .iter()
-                .find(|a| a.name == asset)
-                .ok_or_else(|| crate::Error::AssetNotFound)?;
-
-            // Perps: sz_decimals from meta, price_decimals = 5 (standard for perps)
-            (asset_meta.sz_decimals, 5u32)
-        };
-
-        Ok(AssetInfo::new(
-            asset,
-            base_balance,
-            usdc_balance,
-            sz_decimals,
-            price_decimals,
-        ))
+        self.asset_info.usdc_balance = self.balance;
+        &self.asset_info
     }
 }
 

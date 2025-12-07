@@ -91,6 +91,8 @@ impl TrackedOrder {
 pub struct HyperliquidMarket<L: MarketListener> {
     /// Asset being traded
     pub asset: String,
+    /// Cached asset info (balances and precision)
+    asset_info: AssetInfo,
     /// Owned listener instance (M5)
     listener: L,
     /// Info client for market data
@@ -124,8 +126,12 @@ impl<L: MarketListener> HyperliquidMarket<L> {
         let exchange_client =
             ExchangeClient::new(None, input.wallet, Some(base_url), None, None).await?;
 
+        // Fetch and cache asset info (precision is static)
+        let asset_info = Self::fetch_asset_info(&info_client, &input.asset, user_address).await?;
+
         Ok(Self {
             asset: input.asset,
+            asset_info,
             listener,
             info_client,
             exchange_client,
@@ -134,6 +140,95 @@ impl<L: MarketListener> HyperliquidMarket<L> {
             orders: HashMap::new(),
             exchange_oid_to_order_id: HashMap::new(),
         })
+    }
+
+    /// Fetch asset info from exchange (internal helper)
+    async fn fetch_asset_info(
+        info_client: &InfoClient,
+        asset: &str,
+        user_address: Address,
+    ) -> Result<AssetInfo, crate::Error> {
+        let is_spot = asset.contains('/');
+
+        // Get balances
+        let (base_balance, usdc_balance) = if is_spot {
+            let balances = info_client.user_token_balances(user_address).await?;
+            let base_name = asset.split('/').next().unwrap_or(asset);
+
+            let base_bal = balances
+                .balances
+                .iter()
+                .find(|b| b.coin == base_name)
+                .and_then(|b| b.total.parse::<f64>().ok())
+                .unwrap_or(0.0);
+
+            let usdc_bal = balances
+                .balances
+                .iter()
+                .find(|b| b.coin == "USDC")
+                .and_then(|b| b.total.parse::<f64>().ok())
+                .unwrap_or(0.0);
+
+            (base_bal, usdc_bal)
+        } else {
+            let state = info_client.user_state(user_address).await?;
+
+            let position = state
+                .asset_positions
+                .iter()
+                .find(|p| p.position.coin == asset)
+                .map(|p| p.position.szi.parse::<f64>().unwrap_or(0.0))
+                .unwrap_or(0.0);
+
+            let margin = state
+                .margin_summary
+                .account_value
+                .parse::<f64>()
+                .unwrap_or(0.0);
+
+            (position, margin)
+        };
+
+        // Get precision
+        let (sz_decimals, price_decimals) = if is_spot {
+            let spot_meta = info_client.spot_meta().await?;
+            let base_name = asset.split('/').next().unwrap_or(asset);
+
+            let index_to_token: std::collections::HashMap<_, _> = spot_meta
+                .tokens
+                .iter()
+                .map(|t| (t.index, t))
+                .collect();
+
+            let mut found_sz = 4u32;
+            for spot_asset in &spot_meta.universe {
+                if let Some(token) = index_to_token.get(&spot_asset.tokens[0]) {
+                    if token.name == base_name || asset == spot_asset.name {
+                        found_sz = token.sz_decimals as u32;
+                        break;
+                    }
+                }
+            }
+
+            (found_sz, 6u32)
+        } else {
+            let meta = info_client.meta().await?;
+            let asset_meta = meta
+                .universe
+                .iter()
+                .find(|a| a.name == asset)
+                .ok_or_else(|| crate::Error::AssetNotFound)?;
+
+            (asset_meta.sz_decimals, 5u32)
+        };
+
+        Ok(AssetInfo::new(
+            asset,
+            base_balance,
+            usdc_balance,
+            sz_decimals,
+            price_decimals,
+        ))
     }
 
     /// Start the market event loop
@@ -480,106 +575,23 @@ impl<L: MarketListener> HyperliquidMarket<L> {
         &self.prices
     }
 
-    /// Query asset information including balances and precision
+    /// Get cached asset information (balances and precision)
     ///
-    /// Fetches current balances from the exchange and determines
-    /// the precision (decimal places) for size and price.
+    /// Returns the cached AssetInfo. Precision is static, but balances
+    /// may be stale. Use `refresh_balances()` to update balances.
+    pub fn asset_info(&self) -> &AssetInfo {
+        &self.asset_info
+    }
+
+    /// Refresh cached balances from the exchange
     ///
-    /// # Arguments
-    /// * `asset` - Asset to query (e.g., "BTC", "ETH", "HYPE/USDC")
-    ///
-    /// # Returns
-    /// `AssetInfo` with balances and precision, or error if asset not found
-    pub async fn asset_info(&self, asset: &str) -> Result<AssetInfo, crate::Error> {
-        // Determine if this is a spot or perp asset
-        let is_spot = asset.contains('/');
-
-        // Get balances
-        let (base_balance, usdc_balance) = if is_spot {
-            let balances = self.info_client.user_token_balances(self.user_address).await?;
-
-            // Parse base asset name (e.g., "HYPE" from "HYPE/USDC")
-            let base_name = asset.split('/').next().unwrap_or(asset);
-
-            let base_bal = balances
-                .balances
-                .iter()
-                .find(|b| b.coin == base_name)
-                .and_then(|b| b.total.parse::<f64>().ok())
-                .unwrap_or(0.0);
-
-            let usdc_bal = balances
-                .balances
-                .iter()
-                .find(|b| b.coin == "USDC")
-                .and_then(|b| b.total.parse::<f64>().ok())
-                .unwrap_or(0.0);
-
-            (base_bal, usdc_bal)
-        } else {
-            // For perps, get clearinghouse state
-            let state = self.info_client.user_state(self.user_address).await?;
-
-            let position = state
-                .asset_positions
-                .iter()
-                .find(|p| p.position.coin == asset)
-                .map(|p| p.position.szi.parse::<f64>().unwrap_or(0.0))
-                .unwrap_or(0.0);
-
-            let margin = state
-                .margin_summary
-                .account_value
-                .parse::<f64>()
-                .unwrap_or(0.0);
-
-            (position, margin)
-        };
-
-        // Get precision
-        let (sz_decimals, price_decimals) = if is_spot {
-            let spot_meta = self.info_client.spot_meta().await?;
-            let base_name = asset.split('/').next().unwrap_or(asset);
-
-            // Build index to name mapping
-            let index_to_token: std::collections::HashMap<_, _> = spot_meta
-                .tokens
-                .iter()
-                .map(|t| (t.index, t))
-                .collect();
-
-            // Find the spot asset
-            let mut found_sz = 4u32;
-            for spot_asset in &spot_meta.universe {
-                if let Some(token) = index_to_token.get(&spot_asset.tokens[0]) {
-                    if token.name == base_name || asset == spot_asset.name {
-                        found_sz = token.sz_decimals as u32;
-                        break;
-                    }
-                }
-            }
-
-            // Spot assets typically use 6 decimals for USDC prices
-            (found_sz, 6u32)
-        } else {
-            let meta = self.info_client.meta().await?;
-            let asset_meta = meta
-                .universe
-                .iter()
-                .find(|a| a.name == asset)
-                .ok_or_else(|| crate::Error::AssetNotFound)?;
-
-            // Perps: sz_decimals from meta, price_decimals = 5 (standard for perps)
-            (asset_meta.sz_decimals, 5u32)
-        };
-
-        Ok(AssetInfo::new(
-            asset,
-            base_balance,
-            usdc_balance,
-            sz_decimals,
-            price_decimals,
-        ))
+    /// Updates the balance and usdc_balance fields in the cached AssetInfo.
+    /// Precision fields remain unchanged (they are static).
+    pub async fn refresh_balances(&mut self) -> Result<(), crate::Error> {
+        let updated = Self::fetch_asset_info(&self.info_client, &self.asset, self.user_address).await?;
+        self.asset_info.balance = updated.balance;
+        self.asset_info.usdc_balance = updated.usdc_balance;
+        Ok(())
     }
 }
 

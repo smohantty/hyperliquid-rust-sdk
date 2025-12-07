@@ -60,15 +60,19 @@
 //! use hyperliquid_rust_sdk::BaseUrl;
 //!
 //! let input = HyperliquidMarketInput {
-//!     asset: "BTC".to_string(),
+//!     asset: "HYPE/USDC".to_string(),
 //!     wallet: wallet,
 //!     base_url: Some(BaseUrl::Testnet),
 //! };
 //!
 //! let mut market = HyperliquidMarket::new(input, NoOpListener).await?;
 //!
+//! // Asset info is cached at construction (precision is static)
+//! let info = market.asset_info();
+//! println!("Size decimals: {}", info.sz_decimals);
+//!
 //! // Place a limit buy order
-//! let order = OrderRequest::buy(1, "BTC", 0.1, 50000.0);
+//! let order = OrderRequest::buy(1, "HYPE/USDC", 10.0, 25.0);
 //! market.place_order(order).await;
 //!
 //! // Start the event loop (runs indefinitely)
@@ -82,14 +86,15 @@
 //!     PaperTradingMarket, PaperTradingMarketInput, OrderRequest, NoOpListener
 //! };
 //!
-//! let input = PaperTradingMarketInput {
-//!     initial_balance: 10_000.0,
-//! };
+//! let input = PaperTradingMarketInput::new("HYPE/USDC", 10_000.0);
 //!
 //! let mut market = PaperTradingMarket::new(input, NoOpListener).await?;
 //!
+//! // Asset info cached at construction (precision from exchange)
+//! let info = market.asset_info();
+//!
 //! // Place a simulated buy order - fills when midprice <= limit
-//! let order = OrderRequest::buy(1, "BTC", 0.1, 50000.0);
+//! let order = OrderRequest::buy(1, "HYPE/USDC", 10.0, 25.0);
 //! market.place_order(order);
 //!
 //! // Start event loop (orders fill when midprice crosses limit)
