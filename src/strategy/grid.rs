@@ -167,6 +167,33 @@ impl GridStrategy {
         
         // We mark as initialized so on_price_update proceeds to check for needed orders
         self.initialized = true;
+        self.log_grid_status();
+    }
+
+    fn log_grid_status(&self) {
+        info!("--- Grid Status (Current Price ~{:.2} Range) ---", self.levels.iter().filter(|l| l.side.is_none()).next().map(|l| l.price).unwrap_or(0.0));
+        for (idx, level) in self.levels.iter().enumerate() {
+             let status = if level.order_id.is_some() {
+                 if let Some(s) = level.side {
+                     match s {
+                        OrderSide::Buy => "BUY ",
+                        OrderSide::Sell => "SELL",
+                     }
+                 } else { 
+                     "??? " 
+                 }
+             } else {
+                 "EMPTY"
+             };
+             
+             let marker = if level.side.is_none() { "<<" } else { "  " };
+             
+             info!(
+                 "Lvl {:02} | {} | {:.4} | {:.4} {}", 
+                 idx, status, level.price, level.size, marker
+             );
+        }
+        info!("------------------------------------------------");
     }
 
     fn generate_order_id() -> u64 {
@@ -228,7 +255,7 @@ impl Strategy for GridStrategy {
             if let Some(side) = filled_side {
                 if side == OrderSide::Buy {
                     self.position += fill.qty;
-                    info!("Grid Buy filled at level {} ({:.4}). Level {} is now Empty.", level_idx, fill.price, level_idx);
+                    info!("Grid Buy filled at level {} (Qty: {:.4} @ {:.4}). Level {} is now Empty.", level_idx, fill.qty, fill.price, level_idx);
                     
                     // 2. The Level Above (Opposite) becomes Active (Sell)
                     // If we bought at X, we want to sell at X+1.
@@ -264,7 +291,7 @@ impl Strategy for GridStrategy {
                         self.realized_pnl += profit;
                     }
 
-                    info!("Grid Sell filled at level {} ({:.4}). Level {} is now Empty.", level_idx, fill.price, level_idx);
+                    info!("Grid Sell filled at level {} (Qty: {:.4} @ {:.4}). Level {} is now Empty.", level_idx, fill.qty, fill.price, level_idx);
                     
                     // 2. The Level Below (Opposite) becomes Active (Buy)
                     // If we sold at X, we want to buy back at X-1.
@@ -290,6 +317,9 @@ impl Strategy for GridStrategy {
                 }
             }
         }
+        
+        // Detailed grid status logging as requested
+        self.log_grid_status();
         
         orders
     }

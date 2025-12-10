@@ -359,16 +359,26 @@ impl<L: MarketListener> PaperTradingMarket<L> {
                     self.prices.insert(asset.clone(), price);
 
                     // Only notify listener for our configured asset (compare with exchange key)
-                    if asset == self.asset_key && old_price != Some(price) {
-                        // M6: Synchronous notification, collect returned orders
-                        // Pass user-friendly asset name, not exchange key
-                        if let Ok(mut listener) = self.listener.try_write() {
-                            let orders = listener.on_price_update(&self.asset, price);
-                            pending_orders.extend(orders);
+                    if asset == self.asset_key {
+                        // Keep price accessible by user-friendly name too
+                        self.prices.insert(self.asset.clone(), price);
+                    
+                        if old_price != Some(price) {
+                            // M6: Synchronous notification, collect returned orders
+                            // Pass user-friendly asset name, not exchange key
+                            if let Ok(mut listener) = self.listener.try_write() {
+                                let orders = listener.on_price_update(&self.asset, price);
+                                pending_orders.extend(orders);
+                            }
                         }
+                        
+                        // Check fills for user-friendly asset name
+                        let asset_name = self.asset.clone();
+                        let fill_orders = self.check_and_fill_orders(&asset_name, price);
+                        pending_orders.extend(fill_orders);
                     }
 
-                    // Check pending orders for this asset, collect any returned orders
+                    // Check pending orders for raw asset key (just in case)
                     let fill_orders = self.check_and_fill_orders(&asset, price);
                     pending_orders.extend(fill_orders);
                 }
