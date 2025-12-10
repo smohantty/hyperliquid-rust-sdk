@@ -245,6 +245,9 @@ impl Strategy for GridStrategy {
                     level.order_id = Some(order_id);
                     self.active_orders.insert(order_id, idx);
                     orders.push(req);
+                    
+                    let side_str = if side == OrderSide::Buy { "Buy" } else { "Sell" };
+                    info!("Placed Grid {} at level {} (Qty: {:.4} @ {:.4})", side_str, idx, level.size, level.price);
                 }
             }
         }
@@ -292,7 +295,7 @@ impl Strategy for GridStrategy {
                                 target_level.order_id = Some(order_id);
                                 self.active_orders.insert(order_id, target_idx);
                                 orders.push(req);
-                                info!("Placed paired Sell at level {} ({:.4})", target_idx, target_level.price);
+                                info!("Placed paired Sell at level {} (Qty: {:.4} @ {:.4})", target_idx, target_level.size, target_level.price);
                             }
                         }
                     }
@@ -326,7 +329,7 @@ impl Strategy for GridStrategy {
                                 target_level.order_id = Some(order_id);
                                 self.active_orders.insert(order_id, target_idx);
                                 orders.push(req);
-                                info!("Placed paired Buy at level {} ({:.4})", target_idx, target_level.price);
+                                info!("Placed paired Buy at level {} (Qty: {:.4} @ {:.4})", target_idx, target_level.size, target_level.price);
                              }
                         }
                     }

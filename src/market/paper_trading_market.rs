@@ -442,10 +442,10 @@ impl<L: MarketListener> PaperTradingMarket<L> {
             order.fill(qty, price);
 
             let side_str = if is_buy { "bought" } else { "sold" };
-            info!(
-                "Paper fill: {} {} {} at {} (fee: {:.4})",
-                side_str, qty, asset, price, fee
-            );
+            // info!(
+            //     "Paper fill: {} {} {} at {} (fee: {:.4})",
+            //     side_str, qty, asset, price, fee
+            // );
 
             // Only notify when order is fully filled (M3)
             if was_active && matches!(order.status, OrderStatus::Filled(_)) {
@@ -456,10 +456,10 @@ impl<L: MarketListener> PaperTradingMarket<L> {
                     order.avg_fill_price,   // Average fill price
                 );
 
-                info!(
-                    "Paper order {} fully filled: {} {} at avg price {}",
-                    order_id, order.request.qty, asset, order.avg_fill_price
-                );
+                // info!(
+                //     "Paper order {} fully filled: {} {} at avg price {}",
+                //     order_id, order.request.qty, asset, order.avg_fill_price
+                // );
 
                 // M6: Synchronous notification, return orders to place
                 if let Ok(mut listener) = self.listener.try_write() {
@@ -495,10 +495,10 @@ impl<L: MarketListener> PaperTradingMarket<L> {
         let side = order.side;
         let paper_order = PaperOrder::new(order.clone());
 
-        info!(
-            "Paper order {}: {:?} {} {} @ {}",
-            user_order_id, side, order.qty, order.asset, order.limit_price
-        );
+        // info!(
+        //     "Paper order {}: {:?} {} {} @ {}",
+        //     user_order_id, side, order.qty, order.asset, order.limit_price
+        // );
 
         self.orders.insert(user_order_id, paper_order);
     }
