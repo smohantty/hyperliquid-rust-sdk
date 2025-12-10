@@ -289,7 +289,7 @@ impl GridStrategy {
                     orders.push(req);
                     
                     let side_str = if side == OrderSide::Buy { "Buy" } else { "Sell" };
-                    info!("Placed Grid {} at level {} (Qty: {:.4} @ {:.4})", side_str, idx, level.size, level.price);
+                    info!("Grid Rebalance: Filling Gap at Level {} with {} (Qty: {:.4} @ {:.4})", idx, side_str, level.size, level.price);
                 }
             }
         }
@@ -326,7 +326,7 @@ impl Strategy for GridStrategy {
             
             if side == OrderSide::Buy {
                 self.position += fill.qty;
-                info!("Grid Buy filled at level {} (Qty: {:.4} @ {:.4}, Side: Buy)", level_idx, fill.qty, fill.price);
+                info!(">>> ORDER FILLED: Buy at Level {} (Qty: {:.4} @ {:.4}). Gap created.", level_idx, fill.qty, fill.price);
             } else {
                 self.position -= fill.qty;
                  // PnL tracking
@@ -335,7 +335,7 @@ impl Strategy for GridStrategy {
                     let profit = (fill.price - buy_price) * fill.qty;
                     self.realized_pnl += profit;
                 }
-                info!("Grid Sell filled at level {} (Qty: {:.4} @ {:.4}, Side: Sell)", level_idx, fill.qty, fill.price);
+                info!(">>> ORDER FILLED: Sell at Level {} (Qty: {:.4} @ {:.4}). Gap created.", level_idx, fill.qty, fill.price);
             }
             
             // We do NOT return orders here. We wait for reconcile.
