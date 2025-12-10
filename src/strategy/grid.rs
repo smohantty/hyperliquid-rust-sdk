@@ -43,6 +43,9 @@ pub struct GridStrategy {
     realized_pnl: f64,
     trade_count: u32,
     total_fees: f64,
+    
+    /// Initial price used to determine buy/sell sides
+    initial_price: f64,
 }
 
 impl GridStrategy {
@@ -56,6 +59,7 @@ impl GridStrategy {
         order_size: Option<f64>,
         total_investment: Option<f64>,
         precision: AssetPrecision,
+        initial_price: f64,
     ) -> Self {
         let mut strategy = Self {
             asset,
@@ -68,11 +72,12 @@ impl GridStrategy {
             total_investment,
             levels: Vec::with_capacity(grid_levels),
             active_orders: HashMap::new(),
-            initialized: false,
+            initialized: false, // Will be set to true immediately in initialize_levels
             position: 0.0,
             realized_pnl: 0.0,
             trade_count: 0,
             total_fees: 0.0,
+            initial_price,
         };
         strategy.initialize_levels();
         strategy
@@ -85,10 +90,9 @@ impl GridStrategy {
         }
 
         self.levels.clear();
+        self.active_orders.clear();
         
         // Calculate size per level (constant base or constant quote)
-        // If total_investment is set, we aim for constant quote value per level: size = (total / levels) / price
-        // If order_size is set, we use constant base size
         let quote_per_level = self.total_investment.map(|inv| inv / self.grid_levels as f64);
         let fixed_base_size = self.order_size;
 
@@ -115,7 +119,6 @@ impl GridStrategy {
                 }
             }
             GridMode::Geometric => {
-                // Ratio r: upper = lower * r^(n-1) => r = (upper/lower)^(1/(n-1))
                 let ratio = (self.upper_price / self.lower_price).powf(1.0 / (self.grid_levels as f64 - 1.0));
                 for i in 0..self.grid_levels {
                     let mut price = self.lower_price * ratio.powi(i as i32);
@@ -140,6 +143,30 @@ impl GridStrategy {
         
         info!("Initialized {} levels ({:?}) from {:.4} to {:.4}", 
             self.grid_levels, self.mode, self.lower_price, self.upper_price);
+            
+        // Initial Order Placement Logic (Pure Math)
+        // Determine sides based on initial_price
+        let initial_price = self.initial_price;
+        let _asset = self.asset.clone();
+        
+        // Define a small epsilon for "at the money" check, e.g., 0.1% of price or related to tick
+        let epsilon = initial_price * 0.0005; 
+        
+        for (_idx, level) in self.levels.iter_mut().enumerate() {
+            let side = if (level.price - initial_price).abs() < epsilon {
+                // Price is "on" this level (Empty Level)
+                None
+            } else if level.price < initial_price {
+                Some(OrderSide::Buy)
+            } else {
+                Some(OrderSide::Sell)
+            };
+
+            level.side = side;
+        }
+        
+        // We mark as initialized so on_price_update proceeds to check for needed orders
+        self.initialized = true;
     }
 
     fn generate_order_id() -> u64 {
@@ -151,52 +178,34 @@ impl GridStrategy {
 }
 
 impl Strategy for GridStrategy {
-    fn on_price_update(&mut self, asset: &str, price: f64) -> Vec<OrderRequest> {
+    fn on_price_update(&mut self, asset: &str, _price: f64) -> Vec<OrderRequest> {
         if asset != self.asset {
             return vec![];
         }
 
         let mut orders = vec![];
 
-        if !self.initialized {
-            info!("Grid initializing at current price: {:.4}", price);
-            
-            // Place initial order map
-            for (idx, level) in self.levels.iter_mut().enumerate() {
-                // Determine side
-                let side = if level.price < price {
-                    Some(OrderSide::Buy)
-                } else if level.price > price {
-                    Some(OrderSide::Sell)
-                } else {
-                    None
-                };
-
-                if let Some(side) = side {
+        // "Pure Math" strategy:
+        // We traverse levels. If a level has a side but no order_id, we place it.
+        // The side was determined at initialization (or updated after fills).
+        
+        for (idx, level) in self.levels.iter_mut().enumerate() {
+            if level.order_id.is_none() {
+                if let Some(side) = level.side {
                     let order_id = Self::generate_order_id();
-                    
-                    // Round price again for safety (though levels should be rounded)
-                    // For buys, round down; for sells, round up (standard conservative practice)
-                    // But here levels are fixed. Let's just use level price (already rounded)
-                    let order_price = level.price;
-
                     let req = if side == OrderSide::Buy {
-                        OrderRequest::buy(order_id, asset, level.size, order_price)
+                        OrderRequest::buy(order_id, asset, level.size, level.price)
                     } else {
-                        OrderRequest::sell(order_id, asset, level.size, order_price)
+                        OrderRequest::sell(order_id, asset, level.size, level.price)
                     };
                     
                     level.order_id = Some(order_id);
-                    level.side = Some(side);
                     self.active_orders.insert(order_id, idx);
                     orders.push(req);
                 }
             }
-            
-            self.initialized = true;
-            info!("Placed {} initial orders", orders.len());
         }
-
+        
         orders
     }
 
@@ -206,9 +215,11 @@ impl Strategy for GridStrategy {
         if let Some(level_idx) = self.active_orders.remove(&fill.order_id) {
             let filled_side = self.levels[level_idx].side;
             
-            // Clear the level
+            // 1. The Current Level becomes "Empty"
+            // As per Binance Spot Grid: when a level fills, it enters a waiting state.
+            // It waits for the price to oscillate back.
             self.levels[level_idx].order_id = None;
-            self.levels[level_idx].side = None;
+            self.levels[level_idx].side = None; 
             
             self.trade_count += 1;
             
@@ -217,47 +228,63 @@ impl Strategy for GridStrategy {
             if let Some(side) = filled_side {
                 if side == OrderSide::Buy {
                     self.position += fill.qty;
-                    info!("Grid Buy filled at level {} ({:.4}). Planning sell at level above.", level_idx, fill.price);
+                    info!("Grid Buy filled at level {} ({:.4}). Level {} is now Empty.", level_idx, fill.price, level_idx);
                     
-                    // Place Sell at i+1
+                    // 2. The Level Above (Opposite) becomes Active (Sell)
+                    // If we bought at X, we want to sell at X+1.
                     if level_idx + 1 < self.levels.len() {
                         let target_idx = level_idx + 1;
                         let target_level = &mut self.levels[target_idx];
                         
-                        // Only place if no active order there
-                        if target_level.order_id.is_none() {
-                            let order_id = Self::generate_order_id();
-                            let req = OrderRequest::sell(order_id, &asset, target_level.size, target_level.price);
-                            target_level.order_id = Some(order_id);
-                            target_level.side = Some(OrderSide::Sell);
-                            self.active_orders.insert(order_id, target_idx);
-                            orders.push(req);
+                        // We set the target level to Sell.
+                        // If it was already a Sell (e.g. from init), we just ensure it's active.
+                        // If it was Empty (because price was there previously), it now becomes filled with a Sell.
+                        if target_level.side != Some(OrderSide::Sell) || target_level.order_id.is_none() {
+                             target_level.side = Some(OrderSide::Sell);
+                             
+                             // Place order immediately if not present
+                            if target_level.order_id.is_none() {
+                                let order_id = Self::generate_order_id();
+                                let req = OrderRequest::sell(order_id, &asset, target_level.size, target_level.price);
+                                target_level.order_id = Some(order_id);
+                                self.active_orders.insert(order_id, target_idx);
+                                orders.push(req);
+                                info!("Placed paired Sell at level {} ({:.4})", target_idx, target_level.price);
+                            }
                         }
                     }
+
                 } else {
                     self.position -= fill.qty;
+                    
                     // PnL tracking
                     let buy_price = if level_idx > 0 { self.levels[level_idx - 1].price } else { 0.0 };
-                    if buy_price > 0.0 {
+                     if buy_price > 0.0 {
                         let profit = (fill.price - buy_price) * fill.qty;
                         self.realized_pnl += profit;
                     }
 
-                    info!("Grid Sell filled at level {} ({:.4}). Planning buy at level below.", level_idx, fill.price);
+                    info!("Grid Sell filled at level {} ({:.4}). Level {} is now Empty.", level_idx, fill.price, level_idx);
                     
-                    // Place Buy at i-1
+                    // 2. The Level Below (Opposite) becomes Active (Buy)
+                    // If we sold at X, we want to buy back at X-1.
                     if level_idx > 0 {
                         let target_idx = level_idx - 1;
                         let target_level = &mut self.levels[target_idx];
                         
-                        // Only place if no active order there
-                        if target_level.order_id.is_none() {
-                            let order_id = Self::generate_order_id();
-                            let req = OrderRequest::buy(order_id, &asset, target_level.size, target_level.price);
-                            target_level.order_id = Some(order_id);
-                            target_level.side = Some(OrderSide::Buy);
-                            self.active_orders.insert(order_id, target_idx);
-                            orders.push(req);
+                        // We set the target level to Buy.
+                        // If it was Empty (price was there), it now becomes filled with a Buy.
+                        if target_level.side != Some(OrderSide::Buy) || target_level.order_id.is_none() {
+                             target_level.side = Some(OrderSide::Buy);
+                             
+                             if target_level.order_id.is_none() {
+                                let order_id = Self::generate_order_id();
+                                let req = OrderRequest::buy(order_id, &asset, target_level.size, target_level.price);
+                                target_level.order_id = Some(order_id);
+                                self.active_orders.insert(order_id, target_idx);
+                                orders.push(req);
+                                info!("Placed paired Buy at level {} ({:.4})", target_idx, target_level.price);
+                             }
                         }
                     }
                 }
@@ -278,7 +305,6 @@ impl Strategy for GridStrategy {
             .with_pnl(self.realized_pnl, 0.0, self.total_fees)
             .with_custom(serde_json::json!({
                 "levels": self.grid_levels,
-                "mode": self.mode,
                 "range": format!("{:.2} - {:.2}", self.lower_price, self.upper_price),
                 "active_orders": self.active_orders.len(),
                 "trades": self.trade_count
@@ -310,6 +336,9 @@ impl StrategyFactory for GridStrategyFactory {
         // Option 2: Total investment (Quote)
         let total_investment = params.get("total_investment").and_then(|v| v.as_f64());
         
+        // Initial Price (Required for pure math setup)
+        let initial_price = params.get("initial_price").and_then(|v| v.as_f64()).unwrap_or(0.0);
+        
         // Asset Precision
         let sz_decimals = params.get("sz_decimals").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
         let price_decimals = params.get("price_decimals").and_then(|v| v.as_u64()).unwrap_or(2) as u32;
@@ -325,6 +354,10 @@ impl StrategyFactory for GridStrategyFactory {
             error!("Invalid grid price parameters");
         }
         
+        if initial_price <= 0.0 {
+            error!("Initial price must be > 0");
+        }
+        
         if order_size.is_none() && total_investment.is_none() {
              error!("Must specify either order_size or total_investment");
         }
@@ -337,7 +370,8 @@ impl StrategyFactory for GridStrategyFactory {
             mode,
             order_size,
             total_investment,
-            precision
+            precision,
+            initial_price
         ))
     }
 }

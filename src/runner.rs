@@ -92,6 +92,50 @@ impl BotRunner {
             warn!("Could not resolve precision for {}. Using defaults/config values.", asset);
         }
 
+        // 3.5. Fetch Initial Price and Wait for Trigger
+        let trigger_price = params.get("trigger_price").and_then(|v| v.as_f64());
+        info!("Fetching initial price...");
+        let initial_price = loop {
+            // We need to resolve the asset to a coin index or name for the API
+            // For now, assume info_client handles standard asset names or we get all mids
+            if let Ok(mids) = info_client.all_mids().await {
+                // Try to find price for the asset
+                // The asset key in mids might differ slightly (e.g. "HYPE" vs "HYPE/USDC")
+                // For Spot, it's usually the base coin name
+                let price_opt = if let Some(px) = mids.get(asset) {
+                    Some(px)
+                } else {
+                    let base = asset.split('/').next().unwrap_or(asset);
+                    mids.get(base)
+                };
+
+                if let Some(price_str) = price_opt {
+                    if let Ok(price) = price_str.parse::<f64>() {
+                        
+                        if let Some(trigger) = trigger_price {
+                            info!("Current price: {}, Trigger price: {}", price, trigger);
+                            if price <= trigger {
+                                info!("Trigger price reached!");
+                                break price;
+                            } else {
+                                info!("Waiting for trigger...");
+                                tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+                                continue;
+                            }
+                        } else {
+                            break price;
+                        }
+                    }
+                }
+            }
+            
+            warn!("Failed to fetch price for {}, retrying in 5s...", asset);
+            tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+        };
+        
+        info!("Starting strategy with initial price: {}", initial_price);
+        params.insert("initial_price".to_string(), serde_json::Value::from(initial_price));
+
         // 4. Instantiate Strategy
         let strategy = self.registry
             .create_strategy(&strategy_config.type_name, asset, params)
