@@ -247,7 +247,7 @@ impl GridStrategy {
         let closest_level_price = self.levels[closest_idx].price;
 
         // 2. Iterate all levels and correct them
-        for (idx, level) in self.levels.iter_mut().enumerate() {
+        for (idx, level) in self.levels.iter_mut().enumerate().rev() {
             // Determine Ideal Side
             let ideal_side = if idx == closest_idx {
                 None // Empty
