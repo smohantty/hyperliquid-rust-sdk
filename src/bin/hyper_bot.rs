@@ -25,7 +25,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     registry.register("grid", GridStrategyFactory);
 
     // 3. Create Runner
-    let config_path = "config.toml";
+    let args: Vec<String> = std::env::args().collect();
+    let default_config = "config.toml".to_string();
+    let config_path = args.get(1).unwrap_or(&default_config);
     if !std::path::Path::new(config_path).exists() {
         eprintln!("Config file '{}' not found. Please create one.", config_path);
         std::process::exit(1);
