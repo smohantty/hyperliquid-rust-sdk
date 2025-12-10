@@ -16,6 +16,7 @@ pub enum GridMode {
 #[derive(Debug, Clone)]
 struct GridLevel {
     price: f64,
+    size: f64, // Base asset quantity for this level
     order_id: Option<u64>,
     /// The side of the active order at this level
     side: Option<OrderSide>,
@@ -32,9 +33,6 @@ pub struct GridStrategy {
     /// User can provide either order_size (fixed base qty) OR total_investment (quote qty)
     order_size: Option<f64>,
     total_investment: Option<f64>,
-    
-    /// Calculated base asset size per order
-    active_order_size: f64,
 
     levels: Vec<GridLevel>,
     /// Map order_id -> level_index
@@ -68,7 +66,6 @@ impl GridStrategy {
             precision,
             order_size,
             total_investment,
-            active_order_size: 0.0,
             levels: Vec::with_capacity(grid_levels),
             active_orders: HashMap::new(),
             initialized: false,
@@ -88,15 +85,30 @@ impl GridStrategy {
         }
 
         self.levels.clear();
+        
+        // Calculate size per level (constant base or constant quote)
+        // If total_investment is set, we aim for constant quote value per level: size = (total / levels) / price
+        // If order_size is set, we use constant base size
+        let quote_per_level = self.total_investment.map(|inv| inv / self.grid_levels as f64);
+        let fixed_base_size = self.order_size;
 
         match self.mode {
             GridMode::Arithmetic => {
                 let step = (self.upper_price - self.lower_price) / (self.grid_levels as f64 - 1.0);
                 for i in 0..self.grid_levels {
                     let mut price = self.lower_price + (i as f64 * step);
-                    price = self.precision.round_price(price, false); // Round grid levels
+                    price = self.precision.round_price(price, false);
+                    
+                    let raw_size = if let Some(q_val) = quote_per_level {
+                        q_val / price
+                    } else {
+                        fixed_base_size.unwrap_or(1.0)
+                    };
+                    let size = self.precision.round_size(raw_size);
+
                     self.levels.push(GridLevel {
                         price,
+                        size,
                         order_id: None,
                         side: None,
                     });
@@ -107,9 +119,18 @@ impl GridStrategy {
                 let ratio = (self.upper_price / self.lower_price).powf(1.0 / (self.grid_levels as f64 - 1.0));
                 for i in 0..self.grid_levels {
                     let mut price = self.lower_price * ratio.powi(i as i32);
-                    price = self.precision.round_price(price, false); // Round grid levels
+                    price = self.precision.round_price(price, false);
+                    
+                    let raw_size = if let Some(q_val) = quote_per_level {
+                        q_val / price
+                    } else {
+                        fixed_base_size.unwrap_or(1.0)
+                    };
+                    let size = self.precision.round_size(raw_size);
+
                     self.levels.push(GridLevel {
                         price,
+                        size,
                         order_id: None,
                         side: None,
                     });
@@ -138,27 +159,8 @@ impl Strategy for GridStrategy {
         let mut orders = vec![];
 
         if !self.initialized {
-            // Determine order size
-            if let Some(size) = self.order_size {
-                self.active_order_size = self.precision.round_size(size);
-                info!("Using fixed order size: {:.4}", self.active_order_size);
-            } else if let Some(investment) = self.total_investment {
-                let quote_per_grid = investment / self.grid_levels as f64;
-                let raw_size = quote_per_grid / price;
-                self.active_order_size = self.precision.round_size(raw_size);
-                
-                info!("Calculated order size from investment {:.2} {}: {:.4} base (at price {:.2})", 
-                      investment, "QUOTE", self.active_order_size, price);
-            } else {
-                warn!("No order size or investment specified. Defaulting to 1.0");
-                self.active_order_size = 1.0;
-            }
-
             info!("Grid initializing at current price: {:.4}", price);
             
-            // Capture shared fields
-            let order_size = self.active_order_size;
-
             // Place initial order map
             for (idx, level) in self.levels.iter_mut().enumerate() {
                 // Determine side
@@ -179,9 +181,9 @@ impl Strategy for GridStrategy {
                     let order_price = level.price;
 
                     let req = if side == OrderSide::Buy {
-                        OrderRequest::buy(order_id, asset, order_size, order_price)
+                        OrderRequest::buy(order_id, asset, level.size, order_price)
                     } else {
-                        OrderRequest::sell(order_id, asset, order_size, order_price)
+                        OrderRequest::sell(order_id, asset, level.size, order_price)
                     };
                     
                     level.order_id = Some(order_id);
@@ -210,8 +212,6 @@ impl Strategy for GridStrategy {
             
             self.trade_count += 1;
             
-            // Shared fields
-            let order_size = self.active_order_size;
             let asset = self.asset.clone();
 
             if let Some(side) = filled_side {
@@ -227,7 +227,7 @@ impl Strategy for GridStrategy {
                         // Only place if no active order there
                         if target_level.order_id.is_none() {
                             let order_id = Self::generate_order_id();
-                            let req = OrderRequest::sell(order_id, &asset, order_size, target_level.price);
+                            let req = OrderRequest::sell(order_id, &asset, target_level.size, target_level.price);
                             target_level.order_id = Some(order_id);
                             target_level.side = Some(OrderSide::Sell);
                             self.active_orders.insert(order_id, target_idx);
@@ -253,7 +253,7 @@ impl Strategy for GridStrategy {
                         // Only place if no active order there
                         if target_level.order_id.is_none() {
                             let order_id = Self::generate_order_id();
-                            let req = OrderRequest::buy(order_id, &asset, order_size, target_level.price);
+                            let req = OrderRequest::buy(order_id, &asset, target_level.size, target_level.price);
                             target_level.order_id = Some(order_id);
                             target_level.side = Some(OrderSide::Buy);
                             self.active_orders.insert(order_id, target_idx);
@@ -280,7 +280,6 @@ impl Strategy for GridStrategy {
                 "levels": self.grid_levels,
                 "mode": self.mode,
                 "range": format!("{:.2} - {:.2}", self.lower_price, self.upper_price),
-                "order_size": self.active_order_size,
                 "active_orders": self.active_orders.len(),
                 "trades": self.trade_count
             }))
@@ -298,7 +297,11 @@ impl StrategyFactory for GridStrategyFactory {
         let mode_str = params.get("grid_mode").and_then(|v| v.as_str()).unwrap_or("arithmetic");
         let mode = match mode_str.to_lowercase().as_str() {
             "geometric" => GridMode::Geometric,
-            _ => GridMode::Arithmetic,
+            "arithmetic" => GridMode::Arithmetic,
+            _ => {
+                warn!("Unknown grid mode '{}', defaulting to arithmetic", mode_str);
+                GridMode::Arithmetic
+            }
         };
 
         // Option 1: Explicit order size
