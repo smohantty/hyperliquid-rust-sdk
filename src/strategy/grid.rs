@@ -149,14 +149,30 @@ impl GridStrategy {
         let initial_price = self.initial_price;
         let _asset = self.asset.clone();
         
-        // Define a small epsilon for "at the money" check, e.g., 0.1% of price or related to tick
-        let epsilon = initial_price * 0.0005; 
+        // Initial Order Placement Logic (Pure Math)
+        // Determine sides based on initial_price
+        let initial_price = self.initial_price;
         
-        for (_idx, level) in self.levels.iter_mut().enumerate() {
-            let side = if (level.price - initial_price).abs() < epsilon {
-                // Price is "on" this level (Empty Level)
+        // Find the index of the level closest to the initial price
+        let mut closest_idx = 0;
+        let mut min_diff = f64::MAX;
+        
+        for (idx, level) in self.levels.iter().enumerate() {
+            let diff = (level.price - initial_price).abs();
+            if diff < min_diff {
+                min_diff = diff;
+                closest_idx = idx;
+            }
+        }
+        
+        
+        let closest_price = self.levels[closest_idx].price;
+        
+        for (idx, level) in self.levels.iter_mut().enumerate() {
+            let side = if idx == closest_idx {
+                // The single closest level is left empty to create the spread
                 None
-            } else if level.price < initial_price {
+            } else if level.price < closest_price {
                 Some(OrderSide::Buy)
             } else {
                 Some(OrderSide::Sell)
