@@ -190,7 +190,7 @@ impl GridStrategy {
 
     fn log_grid_status(&self) {
         info!("--- Grid Status (Current Price ~{:.2} Range) ---", self.levels.iter().filter(|l| l.side.is_none()).next().map(|l| l.price).unwrap_or(0.0));
-        for (idx, level) in self.levels.iter().enumerate() {
+        for (idx, level) in self.levels.iter().enumerate().rev() {
              let status = if level.order_id.is_some() {
                  if let Some(s) = level.side {
                      match s {
