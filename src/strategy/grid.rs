@@ -46,6 +46,8 @@ pub struct GridStrategy {
     
     /// Initial price used to determine buy/sell sides
     initial_price: f64,
+    /// Flag to ensure we only place initial orders once in on_price_update
+    initial_placement_done: bool,
 }
 
 impl GridStrategy {
@@ -78,6 +80,7 @@ impl GridStrategy {
             trade_count: 0,
             total_fees: 0.0,
             initial_price,
+            initial_placement_done: false,
         };
         strategy.initialize_levels();
         strategy
@@ -304,14 +307,19 @@ impl Strategy for GridStrategy {
             return vec![];
         }
         
-        // Reconcile logic creates the necessary orders based on new price
-        self.reconcile_orders(price)
+        // Only run reconcile on the FIRST update to place initial orders.
+        // Afterwards, we only reconcile on fills (Event Driven).
+        if !self.initial_placement_done {
+            self.initial_placement_done = true;
+            return self.reconcile_orders(price);
+        }
+        
+        vec![]
     }
 
     fn on_order_filled(&mut self, fill: &OrderFill) -> Vec<OrderRequest> {
-        // Just clear state and log.
-        // Orders will be placed by next on_price_update (reconcile)
-        
+        let mut orders = vec![];
+
         if let Some((level_idx, side)) = self.active_orders.remove(&fill.order_id) {
             
             // Mark level as empty (it filled)
@@ -338,14 +346,14 @@ impl Strategy for GridStrategy {
                 info!(">>> ORDER FILLED: Sell at Level {} (Qty: {:.4} @ {:.4}). Gap created.", level_idx, fill.qty, fill.price);
             }
             
-            // We do NOT return orders here. We wait for reconcile.
-            // But we should satisfy the user request: "put logs in the grid strategy... when order is filled"
-            // (Done above).
+            // Reconcile immediately using the fill price as the anchor
+            let new_orders = self.reconcile_orders(fill.price);
+            orders.extend(new_orders);
             
             self.log_grid_status();
         }
         
-        vec![]
+        orders
     }
     
     fn name(&self) -> &str {
