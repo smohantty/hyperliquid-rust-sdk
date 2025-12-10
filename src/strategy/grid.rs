@@ -340,8 +340,9 @@ impl Strategy for GridStrategy {
             
             self.trade_count += 1;
             
-            // ANSI Green for visibility
+            // ANSI Colors for visibility
             let green = "\x1b[32m";
+            let red = "\x1b[31m";
             let reset = "\x1b[0m";
             let level_price = self.levels[level_idx].price;
 
@@ -358,7 +359,7 @@ impl Strategy for GridStrategy {
                     self.realized_pnl += profit;
                 }
                 info!("{}Lvl {:02} | SELL | {:.*} | {:.*}   <<< ORDER FILLED (Exec: {:.*}, Gap created){}", 
-                    green, level_idx, p_dec, level_price, s_dec, fill.qty, p_dec, fill.price, reset);
+                    red, level_idx, p_dec, level_price, s_dec, fill.qty, p_dec, fill.price, reset);
             }
             
             // Reconcile immediately using the fill price as the anchor
