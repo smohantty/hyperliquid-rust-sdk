@@ -250,7 +250,7 @@ impl GridStrategy {
             
             // Check if matches current state
             // If we have an open order, check if it matches ideal side.
-            if let Some(current_order_id) = level.order_id {
+            if let Some(_current_order_id) = level.order_id {
                 // We have an active order.
                 // If ideal_side is None, implies we should NOT have an order here.
                 // However, canceling orders in this paper market context or simplistic grid might be overkill 

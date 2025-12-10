@@ -436,12 +436,11 @@ impl<L: MarketListener> PaperTradingMarket<L> {
         let position = self.positions.entry(asset.clone()).or_default();
         position.apply_fill(qty, price, is_buy);
 
-        // Update order status
         if let Some(order) = self.orders.get_mut(&order_id) {
             let was_active = order.status.is_active();
             order.fill(qty, price);
 
-            let side_str = if is_buy { "bought" } else { "sold" };
+            // let side_str = if is_buy { "bought" } else { "sold" };
             // info!(
             //     "Paper fill: {} {} {} at {} (fee: {:.4})",
             //     side_str, qty, asset, price, fee
@@ -492,7 +491,6 @@ impl<L: MarketListener> PaperTradingMarket<L> {
     /// Internal place order (doesn't trigger immediate fill check cascade)
     fn place_order_internal(&mut self, order: OrderRequest) {
         let user_order_id = order.order_id;
-        let side = order.side;
         let paper_order = PaperOrder::new(order.clone());
 
         // info!(
