@@ -1,0 +1,16 @@
+[network]
+env = "testnet"
+mode = "paper"
+wallet_private_key = "0000000000000000000000000000000000000000000000000000000000000001"
+
+[strategy]
+type = "grid"
+asset = "HYPE/USDC"
+
+[strategy.params]
+lower_price = 10.0
+upper_price = 20.0
+grid_levels = 5
+grid_mode = "geometric"
+total_investment = 1000.0
+# order_size = 1.0  <-- commented out to use investment sizing

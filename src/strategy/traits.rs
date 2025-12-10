@@ -239,10 +239,41 @@ pub trait Strategy {
     }
 }
 
+// Implement Strategy for Box<dyn Strategy> to allow dynamic dispatch
+impl Strategy for Box<dyn Strategy + Send + Sync> {
+    fn on_price_update(&mut self, asset: &str, price: f64) -> Vec<OrderRequest> {
+        (**self).on_price_update(asset, price)
+    }
+
+    fn on_order_filled(&mut self, fill: &OrderFill) -> Vec<OrderRequest> {
+        (**self).on_order_filled(fill)
+    }
+
+    fn on_start(&mut self) -> Vec<OrderRequest> {
+        (**self).on_start()
+    }
+
+    fn on_stop(&mut self) -> Vec<OrderRequest> {
+        (**self).on_stop()
+    }
+
+    fn name(&self) -> &str {
+        (**self).name()
+    }
+
+    fn status(&self) -> StrategyStatus {
+        (**self).status()
+    }
+
+    fn render_dashboard(&self) -> Option<String> {
+        (**self).render_dashboard()
+    }
+}
+
 /// A no-op strategy that never generates orders
 ///
 /// Useful for testing markets without strategy logic.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct NoOpStrategy;
 
 impl Strategy for NoOpStrategy {

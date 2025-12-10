@@ -405,3 +405,63 @@ mod tests {
     }
 }
 
+use crate::helpers::truncate_float;
+
+/// Asset precision information fetched from exchange meta
+///
+/// According to Hyperliquid docs:
+/// - Prices can have up to 5 significant figures
+/// - Price decimals = MAX_DECIMALS - szDecimals (6 for perps, 8 for spot)
+/// - Size decimals = szDecimals from meta
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct AssetPrecision {
+    /// Decimal places for size (szDecimals from meta)
+    pub sz_decimals: u32,
+    /// Decimal places for price (calculated from market type)
+    pub price_decimals: u32,
+    /// Maximum decimals constant (6 for perps, 8 for spot)
+    pub max_decimals: u32,
+}
+
+impl AssetPrecision {
+    /// Create precision for a perp asset
+    pub fn for_perp(sz_decimals: u32) -> Self {
+        const MAX_DECIMALS_PERP: u32 = 6;
+        Self {
+            sz_decimals,
+            price_decimals: MAX_DECIMALS_PERP.saturating_sub(sz_decimals),
+            max_decimals: MAX_DECIMALS_PERP,
+        }
+    }
+
+    /// Create precision for a spot asset
+    pub fn for_spot(sz_decimals: u32) -> Self {
+        const MAX_DECIMALS_SPOT: u32 = 6;
+        Self {
+            sz_decimals,
+            price_decimals: MAX_DECIMALS_SPOT.saturating_sub(sz_decimals + 1),
+            max_decimals: MAX_DECIMALS_SPOT,
+        }
+    }
+
+    /// Round a price to the correct precision using truncate_float
+    ///
+    /// Enforces Hyperliquid's tick size rules:
+    /// - Max 5 significant figures
+    /// - Max price_decimals decimal places (MAX_DECIMALS - szDecimals)
+    pub fn round_price(&self, price: f64, round_up: bool) -> f64 {
+        truncate_float(price, self.price_decimals, round_up)
+    }
+
+    /// Round a size to the correct precision
+    pub fn round_size(&self, size: f64) -> f64 {
+        truncate_float(size, self.sz_decimals, false)
+    }
+}
+
+impl Default for AssetPrecision {
+    fn default() -> Self {
+        Self::for_perp(0)
+    }
+}
+

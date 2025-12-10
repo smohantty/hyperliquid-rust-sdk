@@ -1,10 +1,12 @@
 #![deny(unreachable_pub)]
 pub mod bot;
+pub mod config;
+pub mod runner;
 mod consts;
 mod eip712;
 mod errors;
 mod exchange;
-pub mod grid;
+
 mod helpers;
 mod info;
 pub mod market;

@@ -65,6 +65,9 @@
 //! ```
 
 mod traits;
+pub mod registry;
+pub mod grid;
 
 pub use traits::{NoOpStrategy, Strategy, StrategyStatus};
+pub use registry::{StrategyFactory, StrategyRegistry};
 
