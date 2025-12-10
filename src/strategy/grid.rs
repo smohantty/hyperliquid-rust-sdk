@@ -366,10 +366,51 @@ impl Strategy for GridStrategy {
                     red, level_idx, p_dec, level_price, s_dec, fill.qty, p_dec, fill.price, reset);
             }
             
-            // Reconcile immediately using the fill price as the anchor
-            let new_orders = self.reconcile_orders(fill.price);
-            orders.extend(new_orders);
+            // NEW LOGIC: Place counter-order based on filled level
+            // If BUY filled at i, place SELL at i+1
+            // If SELL filled at i, place BUY at i-1
             
+            let next_level_idx = if side == OrderSide::Buy {
+                if level_idx + 1 < self.levels.len() {
+                    Some(level_idx + 1)
+                } else {
+                    None
+                }
+            } else {
+                if level_idx > 0 {
+                    Some(level_idx - 1)
+                } else {
+                    None
+                }
+            };
+
+            if let Some(target_idx) = next_level_idx {
+                let target_level = &mut self.levels[target_idx];
+                
+                // Only place if empty. If occupied, we assume the existing order is valid.
+                if target_level.order_id.is_none() {
+                    let target_side = if side == OrderSide::Buy { OrderSide::Sell } else { OrderSide::Buy };
+                    target_level.side = Some(target_side);
+                    
+                    let order_id = Self::generate_order_id();
+                    let req = if target_side == OrderSide::Buy {
+                        OrderRequest::buy(order_id, &self.asset, target_level.size, target_level.price)
+                    } else {
+                        OrderRequest::sell(order_id, &self.asset, target_level.size, target_level.price)
+                    };
+                    
+                    target_level.order_id = Some(order_id);
+                    self.active_orders.insert(order_id, (target_idx, target_side));
+                    orders.push(req);
+                    
+                    let side_str = if target_side == OrderSide::Buy { "BUY " } else { "SELL" };
+                    info!("Lvl {:02} | {} | {:.*} | {:.*}   <<< PLACING ORDER (Counter)", target_idx, side_str, p_dec, target_level.price, s_dec, target_level.size);
+                } else {
+                    // Log that we skipped because occupied (expected in dense grid)
+                    // info!("Lvl {:02} already occupied, skipping counter-order", target_idx);
+                }
+            }
+
             self.log_grid_status(fill.price);
         }
         
@@ -455,5 +496,121 @@ impl StrategyFactory for GridStrategyFactory {
             precision,
             initial_price
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::market::{OrderFill, OrderSide, AssetPrecision};
+
+    fn create_test_strategy() -> GridStrategy {
+        GridStrategy::new(
+            "SOL-USDC".to_string(),
+            100.0,
+            120.0,
+            3, // Levels at 100, 110, 120
+            GridMode::Arithmetic,
+            Some(1.0),
+            None,
+            AssetPrecision { sz_decimals: 2, price_decimals: 2, max_decimals: 6 },
+            110.0 // Start at middle
+        )
+    }
+
+    #[test]
+    fn test_grid_initialization() {
+        let mut strategy = create_test_strategy();
+        
+        // Initial reconcile 
+        let orders = strategy.on_price_update("SOL-USDC", 110.0);
+        
+        // At 110:
+        // Lvl 0 (100) < 110 -> Buy
+        // Lvl 1 (110) == 110 -> Empty
+        // Lvl 2 (120) > 110 -> Sell
+        
+        assert_eq!(orders.len(), 2);
+        
+        let l0 = &strategy.levels[0];
+        assert!(l0.order_id.is_some());
+        assert_eq!(l0.side, Some(OrderSide::Buy));
+        
+        let l1 = &strategy.levels[1];
+        assert!(l1.order_id.is_none());
+        assert!(l1.side.is_none());
+        
+        let l2 = &strategy.levels[2];
+        assert!(l2.order_id.is_some());
+        assert_eq!(l2.side, Some(OrderSide::Sell));
+    }
+
+    #[test]
+    fn test_buy_fill_behavior() {
+        let mut strategy = create_test_strategy();
+        let _ = strategy.on_price_update("SOL-USDC", 110.0);
+        
+        // Verify state: L0(Buy), L1(Empty), L2(Sell)
+        let l0_oid = strategy.levels[0].order_id.unwrap();
+        
+        // Simulate Fill at L0 (Buy)
+        let fill = OrderFill {
+            order_id: l0_oid,
+            asset: "SOL-USDC".to_string(),
+            price: 100.0,
+            qty: 1.0,
+        };
+        
+        let orders = strategy.on_order_filled(&fill);
+        
+        // Expectation:
+        // L0 Filled (Buy). Target -> L1.
+        // L1 matches current logic? L1 is correct counter-level (110).
+        // Check L1 state. L1 was Empty.
+        // Should place SELL at L1.
+        
+        assert_eq!(orders.len(), 1);
+        let order = &orders[0];
+        assert_eq!(order.side, OrderSide::Sell);
+        assert_eq!(order.limit_price, 110.0);
+        
+        // Verify internal state
+        assert!(strategy.levels[0].order_id.is_none()); // L0 now empty
+        assert!(strategy.levels[1].order_id.is_some()); // L1 now has order
+        assert_eq!(strategy.levels[1].side, Some(OrderSide::Sell));
+    }
+
+    #[test]
+    fn test_sell_fill_behavior() {
+        let mut strategy = create_test_strategy();
+        let _ = strategy.on_price_update("SOL-USDC", 110.0);
+        
+        // Verify state: L0(Buy), L1(Empty), L2(Sell)
+        let l2_oid = strategy.levels[2].order_id.unwrap();
+        
+        // Simulate Fill at L2 (Sell)
+        let fill = OrderFill {
+            order_id: l2_oid,
+            asset: "SOL-USDC".to_string(),
+            price: 120.0,
+            qty: 1.0,
+        };
+        
+        let orders = strategy.on_order_filled(&fill);
+        
+        // Expectation:
+        // L2 Filled (Sell). Target -> L1.
+        // L1 was Empty.
+        // Should place BUY at L1.
+        
+        assert_eq!(orders.len(), 1);
+        let order = &orders[0];
+        assert_eq!(order.side, OrderSide::Buy);
+        assert_eq!(order.limit_price, 110.0);
+        
+        // Verify internal state
+        assert!(strategy.levels[2].order_id.is_none()); // L2 now empty
+        assert!(strategy.levels[1].order_id.is_some()); // L1 now has order
+        assert_eq!(strategy.levels[1].side, Some(OrderSide::Buy));
     }
 }

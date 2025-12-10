@@ -376,23 +376,7 @@ impl<S: Strategy> MarketListener for Bot<S> {
     }
 
     fn on_order_filled(&mut self, fill: OrderFill) -> Vec<OrderRequest> {
-        info!(
-            "Bot[{}]: order {} filled - {} {} @ {:.4}",
-            self.strategy.name(),
-            fill.order_id,
-            fill.qty,
-            fill.asset,
-            fill.price
-        );
-        let orders = self.strategy.on_order_filled(&fill);
-        if !orders.is_empty() {
-            info!(
-                "Bot[{}]: strategy returned {} order(s) on fill",
-                self.strategy.name(),
-                orders.len()
-            );
-        }
-        orders
+        self.strategy.on_order_filled(&fill)
     }
 }
 
