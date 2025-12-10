@@ -10,9 +10,9 @@ asset = "HYPE/USDC"
 [strategy.params]
 grid_levels = 100
 grid_mode = "arithmetic"
-lower_price = 20.0
-upper_price = 40.0
+lower_price = 28.0
+upper_price = 32.0
 total_investment = 1000.0
-trigger_price = 30.0 # Start immediately if price < 30.0 (Current ~29.2)
+# trigger_price = 29.34 # Commented out to start immediately
 [log]
 level = "info"
