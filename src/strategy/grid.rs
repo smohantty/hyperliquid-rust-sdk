@@ -185,14 +185,14 @@ impl GridStrategy {
             level.side = side;
         }
 
-        self.log_grid_status();
+        self.log_grid_status(self.initial_price);
     }
 
-    fn log_grid_status(&self) {
+    fn log_grid_status(&self, current_price: f64) {
         let p_dec = self.precision.price_decimals as usize;
         let s_dec = self.precision.sz_decimals as usize;
         
-        info!("--- Grid Status (Current Price ~{:.*} Range) ---", p_dec, self.levels.iter().filter(|l| l.side.is_none()).next().map(|l| l.price).unwrap_or(0.0));
+        info!("--- Grid Status (Current Price ~{:.*} Range) ---", p_dec, current_price);
         for (idx, level) in self.levels.iter().enumerate().rev() {
              let status = if level.order_id.is_some() {
                  if let Some(s) = level.side {
@@ -365,7 +365,7 @@ impl Strategy for GridStrategy {
             let new_orders = self.reconcile_orders(fill.price);
             orders.extend(new_orders);
             
-            self.log_grid_status();
+            self.log_grid_status(fill.price);
         }
         
         orders
