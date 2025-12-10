@@ -257,6 +257,10 @@ impl GridStrategy {
                 Some(OrderSide::Sell)
             };
             
+            if idx == closest_idx {
+                 info!("Lvl {:02} | EMPTY | {:.*} | {:.*}   <<< CURRENT PRICE GAP", idx, p_dec, level.price, s_dec, level.size);
+            }
+            
             // Check if matches current state
             // If we have an open order, check if it matches ideal side.
             if let Some(_current_order_id) = level.order_id {
