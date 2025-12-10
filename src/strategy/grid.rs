@@ -189,7 +189,10 @@ impl GridStrategy {
     }
 
     fn log_grid_status(&self) {
-        info!("--- Grid Status (Current Price ~{:.2} Range) ---", self.levels.iter().filter(|l| l.side.is_none()).next().map(|l| l.price).unwrap_or(0.0));
+        let p_dec = self.precision.price_decimals as usize;
+        let s_dec = self.precision.sz_decimals as usize;
+        
+        info!("--- Grid Status (Current Price ~{:.*} Range) ---", p_dec, self.levels.iter().filter(|l| l.side.is_none()).next().map(|l| l.price).unwrap_or(0.0));
         for (idx, level) in self.levels.iter().enumerate().rev() {
              let status = if level.order_id.is_some() {
                  if let Some(s) = level.side {
@@ -207,8 +210,8 @@ impl GridStrategy {
              let marker = if level.side.is_none() { "<<" } else { "  " };
              
              info!(
-                 "Lvl {:02} | {} | {:.4} | {:.4} {}", 
-                 idx, status, level.price, level.size, marker
+                 "Lvl {:02} | {} | {:.*} | {:.*} {}", 
+                 idx, status, p_dec, level.price, s_dec, level.size, marker
              );
         }
         info!("------------------------------------------------");
@@ -227,6 +230,9 @@ impl GridStrategy {
     fn reconcile_orders(&mut self, current_price: f64) -> Vec<OrderRequest> {
         let mut orders = vec![];
         let asset = self.asset.clone();
+        
+        let p_dec = self.precision.price_decimals as usize;
+        let s_dec = self.precision.sz_decimals as usize;
         
         // 1. Identify where we SHOULD be
         let mut closest_idx = 0;
@@ -292,7 +298,7 @@ impl GridStrategy {
                     orders.push(req);
                     
                     let side_str = if side == OrderSide::Buy { "BUY " } else { "SELL" };
-                    info!("Lvl {:02} | {} | {:.4} | {:.4}   <<< PLACING ORDER (Filling Gap)", idx, side_str, level.price, level.size);
+                    info!("Lvl {:02} | {} | {:.*} | {:.*}   <<< PLACING ORDER (Filling Gap)", idx, side_str, p_dec, level.price, s_dec, level.size);
                 }
             }
         }
@@ -319,6 +325,8 @@ impl Strategy for GridStrategy {
 
     fn on_order_filled(&mut self, fill: &OrderFill) -> Vec<OrderRequest> {
         let mut orders = vec![];
+        let p_dec = self.precision.price_decimals as usize;
+        let s_dec = self.precision.sz_decimals as usize;
 
         if let Some((level_idx, side)) = self.active_orders.remove(&fill.order_id) {
             
@@ -339,7 +347,8 @@ impl Strategy for GridStrategy {
 
             if side == OrderSide::Buy {
                 self.position += fill.qty;
-                info!("{}Lvl {:02} | BUY  | {:.4} | {:.4}   <<< ORDER FILLED (Exec: {:.4}, Gap created){}", green, level_idx, level_price, fill.qty, fill.price, reset);
+                info!("{}Lvl {:02} | BUY  | {:.*} | {:.*}   <<< ORDER FILLED (Exec: {:.*}, Gap created){}", 
+                    green, level_idx, p_dec, level_price, s_dec, fill.qty, p_dec, fill.price, reset);
             } else {
                 self.position -= fill.qty;
                  // PnL tracking
@@ -348,7 +357,8 @@ impl Strategy for GridStrategy {
                     let profit = (fill.price - buy_price) * fill.qty;
                     self.realized_pnl += profit;
                 }
-                info!("{}Lvl {:02} | SELL | {:.4} | {:.4}   <<< ORDER FILLED (Exec: {:.4}, Gap created){}", green, level_idx, level_price, fill.qty, fill.price, reset);
+                info!("{}Lvl {:02} | SELL | {:.*} | {:.*}   <<< ORDER FILLED (Exec: {:.*}, Gap created){}", 
+                    green, level_idx, p_dec, level_price, s_dec, fill.qty, p_dec, fill.price, reset);
             }
             
             // Reconcile immediately using the fill price as the anchor
