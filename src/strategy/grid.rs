@@ -332,9 +332,13 @@ impl Strategy for GridStrategy {
             
             self.trade_count += 1;
             
+            // ANSI Green for visibility
+            let green = "\x1b[32m";
+            let reset = "\x1b[0m";
+
             if side == OrderSide::Buy {
                 self.position += fill.qty;
-                info!(">>> ORDER FILLED: Buy at Level {} (Qty: {:.4} @ {:.4}). Gap created.", level_idx, fill.qty, fill.price);
+                info!("{}Lvl {:02} | BUY  | {:.4} | {:.4}   <<< ORDER FILLED (Gap created){}", green, level_idx, fill.price, fill.qty, reset);
             } else {
                 self.position -= fill.qty;
                  // PnL tracking
@@ -343,7 +347,7 @@ impl Strategy for GridStrategy {
                     let profit = (fill.price - buy_price) * fill.qty;
                     self.realized_pnl += profit;
                 }
-                info!(">>> ORDER FILLED: Sell at Level {} (Qty: {:.4} @ {:.4}). Gap created.", level_idx, fill.qty, fill.price);
+                info!("{}Lvl {:02} | SELL | {:.4} | {:.4}   <<< ORDER FILLED (Gap created){}", green, level_idx, fill.price, fill.qty, reset);
             }
             
             // Reconcile immediately using the fill price as the anchor
