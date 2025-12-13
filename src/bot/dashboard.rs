@@ -370,6 +370,7 @@ pub fn render_dashboard(status: &StrategyStatus) -> String {
         let loadedCandles = false;
         let lastCandleFetchTime = 0;
         let lastCandleData = null; // Track the last candle for live updates
+        let candleStartTime = null; // Track initial start time (1 day before bot start)
 
         function switchTab(tabName) {{
             // Sidebar tabs
@@ -456,9 +457,13 @@ pub fn render_dashboard(status: &StrategyStatus) -> String {
                 if (shouldFetchCandles && data.asset && chart) {{
                     try {{
                         const coin = data.asset.split('/')[0];
-                        const start = now - (24 * 60 * 60 * 1000); // 1 day
                         
-                        const url = `/api/candles?coin=${{encodeURIComponent(coin)}}&interval=15m&start=${{start}}&end=${{now}}`;
+                        // Set initial start time on first fetch (1 day before bot start)
+                        if (!candleStartTime) {{
+                            candleStartTime = now - (24 * 60 * 60 * 1000);
+                        }}
+                        
+                        const url = `/api/candles?coin=${{encodeURIComponent(coin)}}&interval=15m&start=${{candleStartTime}}&end=${{now}}`;
                         
                         const cRes = await fetch(url);
                         if (!cRes.ok) {{ throw new Error("HTTP " + cRes.status); }}
