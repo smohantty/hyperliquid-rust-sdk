@@ -573,22 +573,35 @@ pub fn render_dashboard(status: &StrategyStatus) -> String {
                     // Create markers for candles with trades
                     const markers = [];
                     tradesByCandle.forEach((counts, time) => {{
-                        if (counts.buys > 0) {{
+                        const hasBuys = counts.buys > 0;
+                        const hasSells = counts.sells > 0;
+                        
+                        if (hasBuys && hasSells) {{
+                            // Both buys and sells - show combined marker
                             markers.push({{
                                 time: time,
-                                position: 'aboveBar',
-                                color: '#00c2a2',
-                                shape: 'arrowUp',
-                                text: `B:${{counts.buys}}`,
+                                position: 'belowBar',
+                                color: '#9494a8',
+                                shape: 'circle',
+                                text: `B:${{counts.buys}} S:${{counts.sells}}`,
                             }});
-                        }}
-                        if (counts.sells > 0) {{
+                        }} else if (hasBuys) {{
+                            // Only buys
+                            markers.push({{
+                                time: time,
+                                position: 'belowBar',
+                                color: '#00c2a2',
+                                shape: 'circle',
+                                text: `${{counts.buys}}`,
+                            }});
+                        }} else if (hasSells) {{
+                            // Only sells
                             markers.push({{
                                 time: time,
                                 position: 'belowBar',
                                 color: '#ff3b69',
-                                shape: 'arrowDown',
-                                text: `S:${{counts.sells}}`,
+                                shape: 'circle',
+                                text: `${{counts.sells}}`,
                             }});
                         }}
                     }});
