@@ -8,11 +8,16 @@ type = "grid"
 asset = "BTC"
 
 [strategy.params]
-grid_levels = 20
+grid_levels = 100
 grid_mode = "arithmetic"
-lower_price = 90000.0
-upper_price = 90500.0
-total_investment = 1000.0
+lower_price = 85000.0
+upper_price = 95500.0
+total_investment = 10000.0
 # trigger_price = 29.34 # Commented out to start immediately
 [log]
 level = "info"
+
+[server]
+enabled = true
+port = 3000
+host = "127.0.0.1"

@@ -146,6 +146,16 @@ impl BotRunner {
         // 5. Create Bot Wrapper
         let bot = Arc::new(RwLock::new(Bot::new(strategy)));
 
+        // 5.5. Start Dashboard Server
+        if self.config.server.enabled {
+            let server_bot = bot.clone();
+            let port = self.config.server.port;
+            let host = self.config.server.host.clone();
+            tokio::spawn(async move {
+                super::server::start_server(server_bot, port, host).await;
+            });
+        }
+
         // 6. Create Market based on mode
         match network_config.mode.as_str() {
             "live" => {

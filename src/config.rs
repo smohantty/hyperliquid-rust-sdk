@@ -13,6 +13,9 @@ pub struct Settings {
     /// Logging configuration
     #[serde(default)]
     pub log: LogConfig,
+    /// Server configuration
+    #[serde(default)]
+    pub server: ServerConfig,
 }
 
 #[derive(Debug, Deserialize)]
@@ -47,6 +50,41 @@ pub struct LogConfig {
 
 fn default_log_level() -> String {
     "info".to_string()
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ServerConfig {
+    /// Enable local dashboard server
+    #[serde(default = "default_server_enabled")]
+    pub enabled: bool,
+    /// Server port (default 3000)
+    #[serde(default = "default_server_port")]
+    pub port: u16,
+    /// Server host (default 127.0.0.1)
+    #[serde(default = "default_server_host")]
+    pub host: String,
+}
+
+impl Default for ServerConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_server_enabled(),
+            port: default_server_port(),
+            host: default_server_host(),
+        }
+    }
+}
+
+fn default_server_enabled() -> bool {
+    false
+}
+
+fn default_server_port() -> u16 {
+    3000
+}
+
+fn default_server_host() -> String {
+    "127.0.0.1".to_string()
 }
 
 impl Settings {

@@ -46,6 +46,8 @@ pub struct GridStrategy {
     
     /// Initial price used to determine buy/sell sides
     initial_price: f64,
+    /// Last seen market price (for dashboard)
+    last_price: f64,
     /// Flag to ensure we only place initial orders once in on_price_update
     initial_placement_done: bool,
 }
@@ -80,6 +82,7 @@ impl GridStrategy {
             trade_count: 0,
             total_fees: 0.0,
             initial_price,
+            last_price: initial_price,
             initial_placement_done: false,
         };
         strategy.initialize_levels();
@@ -317,6 +320,8 @@ impl Strategy for GridStrategy {
             return vec![];
         }
         
+        self.last_price = price;
+        
         // Only run reconcile on the FIRST update to place initial orders.
         // Afterwards, we only reconcile on fills (Event Driven).
         if !self.initial_placement_done {
@@ -432,6 +437,280 @@ impl Strategy for GridStrategy {
                 "active_orders": self.active_orders.len(),
                 "trades": self.trade_count
             }))
+    }
+
+    fn render_dashboard(&self) -> Option<String> {
+        let status = self.status();
+        
+        // 1. Gather Orders
+        struct BookLevel {
+            price: f64,
+            size: f64,
+            total: f64,
+            level_idx: usize,
+        }
+
+        let mut asks: Vec<BookLevel> = Vec::new();
+        let mut bids: Vec<BookLevel> = Vec::new();
+
+        for (idx, level) in self.levels.iter().enumerate() {
+            if let Some(side) = level.side {
+                if level.order_id.is_some() {
+                    let bl = BookLevel {
+                        price: level.price,
+                        size: level.size,
+                        total: 0.0, // Calculated later
+                        level_idx: idx,
+                    };
+                    if side == OrderSide::Sell {
+                        asks.push(bl);
+                    } else {
+                        bids.push(bl);
+                    }
+                }
+            }
+        }
+
+        // 2. Sort
+        // Asks: High -> Low (so lowest asking price is at bottom visually)
+        asks.sort_by(|a, b| b.price.partial_cmp(&a.price).unwrap());
+        // Bids: High -> Low (so highest bidding price is at top visually)
+        bids.sort_by(|a, b| b.price.partial_cmp(&a.price).unwrap());
+
+        // 3. Calculate Totals (Accumulate from the "Spread" outwards)
+        
+        let mut acc_ask = 0.0;
+        for ask in asks.iter_mut().rev() {
+            acc_ask += ask.size;
+            ask.total = acc_ask;
+        }
+
+        let mut acc_bid = 0.0;
+        for bid in bids.iter_mut() {
+            acc_bid += bid.size;
+            bid.total = acc_bid;
+        }
+
+        let max_total = acc_ask.max(acc_bid).max(0.0001);
+
+        // 4. Generate HTML
+        let p_dec = self.precision.price_decimals as usize;
+        let s_dec = self.precision.sz_decimals as usize;
+
+        let mut rows_html = String::new();
+
+        // Render Asks (Red)
+        for ask in &asks {
+            let width_pct = (ask.total / max_total) * 100.0;
+            let dist_pct = (ask.price - self.last_price) / self.last_price * 100.0;
+            let row = format!(
+                r#"<div class="row ask">
+                    <div class="depth-bar" style="width: {:.2}%"></div>
+                    <div class="col lvl">{}</div>
+                    <div class="col price">{:.*}</div>
+                    <div class="col dist">{:.2}%</div>
+                    <div class="col size">{:.*}</div>
+                    <div class="col total">{:.*}</div>
+                </div>"#,
+                width_pct, ask.level_idx, p_dec, ask.price, dist_pct, s_dec, ask.size, s_dec, ask.total
+            );
+            rows_html.push_str(&row);
+        }
+
+        // Spread / Gap
+        let spread_html = if let (Some(best_ask), Some(best_bid)) = (asks.last(), bids.first()) {
+            let spread = best_ask.price - best_bid.price;
+            let spread_pct = (spread / best_ask.price) * 100.0;
+            format!(
+                r#"<div class="spread-row">
+                    <span>Spread: {:.*} ({:.4}%)</span>
+                </div>"#,
+                p_dec, spread, spread_pct
+            )
+        } else {
+             r#"<div class="spread-row"><span>No Active Spread</span></div>"#.to_string()
+        };
+        rows_html.push_str(&spread_html);
+
+        // Render Bids (Green)
+        for bid in &bids {
+            let width_pct = (bid.total / max_total) * 100.0;
+            let dist_pct = (bid.price - self.last_price) / self.last_price * 100.0;
+            let row = format!(
+                r#"<div class="row bid">
+                    <div class="depth-bar" style="width: {:.2}%"></div>
+                    <div class="col lvl">{}</div>
+                    <div class="col price">{:.*}</div>
+                    <div class="col dist">{:.2}%</div>
+                    <div class="col size">{:.*}</div>
+                    <div class="col total">{:.*}</div>
+                </div>"#,
+                width_pct, bid.level_idx, p_dec, bid.price, dist_pct, s_dec, bid.size, s_dec, bid.total
+            );
+            rows_html.push_str(&row);
+        }
+
+        // Return full page
+        Some(format!(
+            r##"<!DOCTYPE html>
+<html>
+<head>
+    <title>{name} - Grid CLOB</title>
+    <meta http-equiv="refresh" content="2">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <style>
+        :root {{
+            --bg-primary: #12121a;
+            --bg-secondary: #0a0a0f;
+            --text-primary: #ffffff;
+            --text-muted: #5a5a70;
+            --green: #00d4aa;
+            --red: #ff4d6a;
+            --green-bg: rgba(0, 212, 170, 0.15);
+            --red-bg: rgba(255, 77, 106, 0.15);
+        }}
+        * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+        body {{
+            font-family: 'Inter', sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            padding: 20px;
+        }}
+        .container {{ max-width: 700px; margin: 0 auto; }}
+        
+        header {{ margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center; }}
+        h1 {{ font-size: 18px; }}
+        .stats {{ font-size: 13px; color: var(--text-muted); }}
+        
+        .clob-header {{
+            display: flex;
+            padding: 8px 12px;
+            font-size: 12px;
+            color: var(--text-muted);
+            border-bottom: 1px solid #2a2a3a;
+            background: var(--bg-secondary);
+            position: sticky;
+            top: 0;
+            z-index: 10;
+        }}
+        .col {{ flex: 1; text-align: right; z-index: 1; }}
+        .col.price {{ text-align: left; flex: 1.5; }}
+        .col.lvl {{ text-align: left; flex: 0.5; color: var(--text-muted); }}
+        .col.dist {{ flex: 1; color: var(--text-muted); }}
+        
+        .book {{
+            background: var(--bg-secondary);
+            border: 1px solid #2a2a3a;
+            border-radius: 8px;
+            overflow: hidden;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 13px;
+            display: flex;
+            flex-direction: column;
+            max-height: 80vh; /* Fixed height relative to viewport */
+        }}
+
+        .clob-content {{
+            overflow-y: auto;
+            flex: 1;
+        }}
+
+        /* Custom Scrollbar */
+        .clob-content::-webkit-scrollbar {{
+            width: 8px;
+        }}
+        .clob-content::-webkit-scrollbar-track {{
+            background: var(--bg-secondary);
+        }}
+        .clob-content::-webkit-scrollbar-thumb {{
+            background: #2a2a3a;
+            border-radius: 4px;
+        }}
+        .clob-content::-webkit-scrollbar-thumb:hover {{
+            background: #3a3a4a;
+        }}
+        
+        .row {{
+            display: flex;
+            padding: 4px 12px;
+            position: relative; /* For depth bar absolute pos */
+        }}
+        .row:hover {{ background: #2a2a3a; }}
+        
+        .depth-bar {{
+            position: absolute;
+            top: 2px; bottom: 2px; right: 0;
+            opacity: 0.3;
+            z-index: 0;
+        }}
+        .ask .depth-bar {{ background: var(--red); }}
+        .bid .depth-bar {{ background: var(--green); }}
+        
+        .ask .price {{ color: var(--red); }}
+        .bid .price {{ color: var(--green); }}
+        
+        .spread-row {{
+            text-align: center;
+            padding: 8px 0;
+            color: var(--text-muted);
+            font-size: 11px;
+            border-top: 1px solid #2a2a3a;
+            border-bottom: 1px solid #2a2a3a;
+        }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div>
+                <h1>{name} / {asset}</h1>
+                <div class="stats">{levels} Levels | Range: {range}</div>
+            </div>
+            <div style="text-align: right">
+                <div>PnL: <span style="color: {pnl_color}">${pnl:.2}</span></div>
+                <div class="stats">Pos: {pos:.4}</div>
+            </div>
+        </header>
+
+        <div class="book">
+            <div class="clob-header">
+                <div class="col lvl">Lvl</div>
+                <div class="col price">Price</div>
+                <div class="col dist">Dist%</div>
+                <div class="col">Size</div>
+                <div class="col">Total</div>
+            </div>
+            <div class="clob-content" id="clobContent">
+                {rows_html}
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        // Auto-center on the spread (Existing script)
+        window.onload = function() {{
+            const container = document.getElementById('clobContent');
+            const spread = document.querySelector('.spread-row');
+            
+            if (container && spread) {{
+                const topPos = spread.offsetTop;
+                const containerHeight = container.clientHeight;
+                const spreadHeight = spread.clientHeight;
+                container.scrollTop = topPos - (containerHeight / 2) + (spreadHeight / 2);
+            }}
+        }};
+    </script>
+</body>
+</html>"##,
+            name = status.name,
+            asset = status.asset,
+            levels = self.grid_levels,
+            range = format!("{:.2} - {:.2}", self.lower_price, self.upper_price),
+            pnl_color = if status.net_profit() >= 0.0 { "var(--green)" } else { "var(--red)" },
+            pnl = status.net_profit(),
+            pos = status.position,
+            rows_html = rows_html
+        ))
     }
 }
 
