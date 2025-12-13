@@ -499,9 +499,24 @@ pub fn render_dashboard(status: &StrategyStatus) -> String {
                 }}
                 
                 // Update last candle with current price (live updates)
-                if (loadedCandles && lastCandleData && data.custom && data.custom.current_price) {{
-                    const currentPrice = data.custom.current_price;
-                    if (currentPrice > 0) {{
+                if (loadedCandles && lastCandleData) {{
+                    let currentPrice = null;
+                    
+                    // Try to get current price from data
+                    if (data.custom && data.custom.current_price && data.custom.current_price > 0) {{
+                        currentPrice = data.custom.current_price;
+                    }}
+                    // Fallback: calculate mid-price from order book
+                    else if (data.custom && data.custom.book) {{
+                        const book = data.custom.book;
+                        if (book.asks && book.asks.length > 0 && book.bids && book.bids.length > 0) {{
+                            const bestAsk = book.asks[book.asks.length - 1].price;
+                            const bestBid = book.bids[0].price;
+                            currentPrice = (bestAsk + bestBid) / 2;
+                        }}
+                    }}
+                    
+                    if (currentPrice && currentPrice > 0) {{
                         const updatedCandle = {{
                             ...lastCandleData,
                             high: Math.max(lastCandleData.high, currentPrice),
@@ -512,7 +527,7 @@ pub fn render_dashboard(status: &StrategyStatus) -> String {
                         try {{
                             candleSeries.update(updatedCandle);
                         }} catch(e) {{
-                            // Silently ignore update errors
+                            console.error("Candle update error:", e);
                         }}
                     }}
                 }}
