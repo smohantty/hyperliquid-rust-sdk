@@ -490,6 +490,51 @@ pub fn render_dashboard(status: &StrategyStatus) -> String {
                     }}
                 }}
                 
+                // --- Draw Grid Level Lines ---
+                if (candleSeries && data.custom && data.custom.book) {{
+                    // Clear existing price lines (if any)
+                    if (!window.gridPriceLines) {{
+                        window.gridPriceLines = [];
+                    }}
+                    
+                    // Remove old lines
+                    window.gridPriceLines.forEach(line => {{
+                        try {{ candleSeries.removePriceLine(line); }} catch(e) {{}}
+                    }});
+                    window.gridPriceLines = [];
+                    
+                    const book = data.custom.book;
+                    
+                    // Draw Buy levels (green)
+                    if (book.bids && Array.isArray(book.bids)) {{
+                        book.bids.forEach(bid => {{
+                            const line = candleSeries.createPriceLine({{
+                                price: bid.price,
+                                color: '#00c2a2',
+                                lineWidth: 1,
+                                lineStyle: 2, // Dashed
+                                axisLabelVisible: false,
+                                title: '',
+                            }});
+                            window.gridPriceLines.push(line);
+                        }});
+                    }}
+                    
+                    // Draw Sell levels (red)
+                    if (book.asks && Array.isArray(book.asks)) {{
+                        book.asks.forEach(ask => {{
+                            const line = candleSeries.createPriceLine({{
+                                price: ask.price,
+                                color: '#ff3b69',
+                                lineWidth: 1,
+                                lineStyle: 2, // Dashed
+                                axisLabelVisible: false,
+                                title: '',
+                            }});
+                            window.gridPriceLines.push(line);
+                        }});
+                    }}
+                }}
 
                 // --- 1. Update Header / Bot Stats ---
                 const pnl = data.realized_pnl - data.total_fees;
