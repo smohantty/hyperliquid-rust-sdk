@@ -577,13 +577,19 @@ pub fn render_dashboard(status: &StrategyStatus) -> String {
                         }});
                     }}
                     
-                    // Draw current price line (cyan, like in the reference image)
-                    if (book.asks && book.asks.length > 0 && book.bids && book.bids.length > 0) {{
+                    // Draw current price line
+                    console.log("Checking for current price line creation...", {{
+                        hasBook: !!book,
+                        hasAsks: book?.asks?.length,
+                        hasBids: book?.bids?.length
+                    }});
+                    
+                    if (book && book.asks && book.asks.length > 0 && book.bids && book.bids.length > 0) {{
                         const bestAsk = book.asks[book.asks.length - 1].price;
                         const bestBid = book.bids[0].price;
                         const midPrice = (bestAsk + bestBid) / 2;
                         
-                        console.log("Creating current price line at:", midPrice);
+                        console.log("Mid price calculated:", midPrice, "from", bestBid, "to", bestAsk);
                         
                         // Remove old current price line if exists
                         if (window.currentPriceLine) {{
@@ -604,9 +610,9 @@ pub fn render_dashboard(status: &StrategyStatus) -> String {
                                 axisLabelVisible: true,
                                 title: 'Current',
                             }});
-                            console.log("Current price line created successfully");
+                            console.log("✓ Current price line created at", midPrice);
                         }} catch(e) {{
-                            console.error("Error creating current price line:", e);
+                            console.error("✗ Error creating current price line:", e);
                         }}
                     }} else {{
                         console.warn("Cannot create current price line - missing order book data");
