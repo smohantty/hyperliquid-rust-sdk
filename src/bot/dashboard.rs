@@ -577,6 +577,37 @@ pub fn render_dashboard(status: &StrategyStatus) -> String {
                         }});
                     }}
                 }}
+                
+                // --- Current Price Line (Blue) ---
+                if (candleSeries && data.custom && data.custom.book) {{
+                    const book = data.custom.book;
+                    
+                    if (book.asks && book.asks.length > 0 && book.bids && book.bids.length > 0) {{
+                        const bestAsk = book.asks[book.asks.length - 1].price;
+                        const bestBid = book.bids[0].price;
+                        const midPrice = (bestAsk + bestBid) / 2;
+                        
+                        // Remove old current price line if exists
+                        if (window.currentPriceLine) {{
+                            try {{ 
+                                candleSeries.removePriceLine(window.currentPriceLine); 
+                            }} catch(e) {{}}
+                        }}
+                        
+                        // Create blue current price line
+                        try {{
+                            window.currentPriceLine = candleSeries.createPriceLine({{
+                                price: midPrice,
+                                color: '#00c2ff',
+                                lineWidth: 1,
+                                lineStyle: 0,
+                                axisLabelVisible: true,
+                                title: 'Px',
+                            }});
+                        }} catch(e) {{}}
+                    }}
+                }}
+
 
                 // --- 1. Update Header / Bot Stats ---
                 const pnl = data.realized_pnl - data.total_fees;
