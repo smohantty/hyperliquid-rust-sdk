@@ -625,9 +625,12 @@ pub fn render_dashboard(status: &StrategyStatus) -> String {
                             midPrice = data.custom.current_price;
                         }}
                         
+                        
                         html += `<div class="spread-row">
-                            Spread: ${{spread.toFixed(P_DEC)}} (${{spreadPct.toFixed(3)}}%) 
-                            <span style="color: var(--text-primary); margin-left: 8px">Px: ${{midPrice.toFixed(P_DEC)}}</span>
+                            <div class="col lvl-idx"></div>
+                            <div class="col right" style="color: #00c2ff; font-weight: bold;">${{midPrice.toFixed(P_DEC)}}</div>
+                            <div class="col right" style="color: var(--text-secondary);">${{spreadPct.toFixed(2)}}%</div>
+                            <div class="col right"></div>
                         </div>`;
                         
                         // Update Chart Realtime Price Line (Optional)
