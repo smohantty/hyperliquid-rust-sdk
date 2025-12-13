@@ -509,10 +509,9 @@ impl Strategy for GridStrategy {
                     <div class="col lvl">{}</div>
                     <div class="col price">{:.*}</div>
                     <div class="col dist">{:.2}%</div>
-                    <div class="col size">{:.*}</div>
                     <div class="col total">{:.*}</div>
                 </div>"#,
-                width_pct, ask.level_idx, p_dec, ask.price, dist_pct, s_dec, ask.size, s_dec, ask.total
+                width_pct, ask.level_idx, p_dec, ask.price, dist_pct, s_dec, ask.total
             );
             rows_html.push_str(&row);
         }
@@ -542,10 +541,9 @@ impl Strategy for GridStrategy {
                     <div class="col lvl">{}</div>
                     <div class="col price">{:.*}</div>
                     <div class="col dist">{:.2}%</div>
-                    <div class="col size">{:.*}</div>
                     <div class="col total">{:.*}</div>
                 </div>"#,
-                width_pct, bid.level_idx, p_dec, bid.price, dist_pct, s_dec, bid.size, s_dec, bid.total
+                width_pct, bid.level_idx, p_dec, bid.price, dist_pct, s_dec, bid.total
             );
             rows_html.push_str(&row);
         }
@@ -677,7 +675,6 @@ impl Strategy for GridStrategy {
                 <div class="col lvl">Lvl</div>
                 <div class="col price">Price</div>
                 <div class="col dist">Dist%</div>
-                <div class="col">Size</div>
                 <div class="col">Total</div>
             </div>
             <div class="clob-content" id="clobContent">
