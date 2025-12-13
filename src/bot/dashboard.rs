@@ -607,7 +607,7 @@ pub fn render_dashboard(status: &StrategyStatus) -> String {
                     for (let i = 0; i < book.asks.length; i++) {{
                         const ask = book.asks[i];
                         if (i === 0) console.log("Sample ask:", ask); // Debug
-                        const sizeDisplay = ask.has_order ? ask.size.toFixed(S_DEC) : '-- --';
+                        const sizeDisplay = ask.has_order ? ask.size.toFixed(S_DEC) : '--';
                         const opacity = ask.has_order ? '1' : '0.3';
                         html += `<div class="row" style="opacity: ${{opacity}}">
                             <div class="col lvl-idx">${{ask.level_idx}}</div>
@@ -648,7 +648,7 @@ pub fn render_dashboard(status: &StrategyStatus) -> String {
 
                     // Bids
                     for (const bid of book.bids) {{
-                        const sizeDisplay = bid.has_order ? bid.size.toFixed(S_DEC) : '-- --';
+                        const sizeDisplay = bid.has_order ? bid.size.toFixed(S_DEC) : '--';
                         const opacity = bid.has_order ? '1' : '0.3';
                         html += `<div class="row" style="opacity: ${{opacity}}">
                             <div class="col lvl-idx">${{bid.level_idx}}</div>
