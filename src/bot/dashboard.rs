@@ -427,8 +427,8 @@ pub fn render_dashboard(status: &StrategyStatus) -> String {
                             lastValueVisible: true,
                             priceLineVisible: true,
                             priceLineColor: '#00c2ff',
-                            priceLineWidth: 2,
-                            priceLineStyle: 0,
+                            priceLineWidth: 1,
+                            priceLineStyle: 2,
                         }});
                     }} catch (e) {{
                         console.error("Error adding series. Chart object:", chart);
