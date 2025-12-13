@@ -71,14 +71,9 @@ impl<S: Strategy> Bot<S> {
         serde_json::to_value(self.strategy.status()).unwrap_or_default()
     }
 
-    /// Render the strategy's dashboard
-    ///
-    /// Returns custom HTML from the strategy if provided,
-    /// otherwise generates a default dashboard from the status.
     pub fn render_dashboard(&self) -> String {
-        self.strategy
-            .render_dashboard()
-            .unwrap_or_else(|| render_default_dashboard(&self.strategy.status()))
+        // Use generic dashboard for all strategies
+        crate::bot::dashboard::render_dashboard(&self.strategy.status())
     }
 }
 

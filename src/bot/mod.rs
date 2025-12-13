@@ -29,5 +29,6 @@ mod bot;
 
 pub use bot::{render_default_dashboard, Bot};
 pub mod runner;
+pub mod dashboard;
 mod server; // Internal module
 pub use runner::BotRunner;
