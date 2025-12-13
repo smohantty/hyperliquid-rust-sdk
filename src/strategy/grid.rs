@@ -609,7 +609,7 @@ impl Strategy for GridStrategy {
                 const data = await res.json();
                 
                 // Update Header Stats
-                const pnl = data.pnl_quote;
+                const pnl = data.realized_pnl - data.total_fees;
                 const pos = data.position;
                 const pnlEl = document.getElementById('pnlVal');
                 pnlEl.innerText = '$' + pnl.toFixed(2);
