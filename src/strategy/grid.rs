@@ -559,7 +559,9 @@ impl Strategy for GridStrategy {
         .stats {{ font-size: 13px; color: var(--text-muted); }}
         
         .clob-header {{
-            display: flex;
+            display: grid;
+            grid-template-columns: 50px 1fr 1fr 1fr;
+            gap: 10px;
             padding: 8px 12px;
             font-size: 12px;
             color: var(--text-muted);
@@ -569,10 +571,10 @@ impl Strategy for GridStrategy {
             top: 0;
             z-index: 10;
         }}
-        .col {{ flex: 1; text-align: right; z-index: 1; }}
-        .col.price {{ text-align: left; flex: 1; }}
-        .col.lvl {{ text-align: left; flex: 0.4; color: var(--text-muted); }}
-        .col.dist {{ flex: 1; color: var(--text-muted); }}
+        .col {{ text-align: right; z-index: 1; }}
+        .col.price {{ text-align: right; }} /* Align price to right for consistency */
+        .col.lvl {{ text-align: left; color: var(--text-muted); }}
+        .col.dist {{ color: var(--text-muted); }}
         
         .book {{
             background: var(--bg-secondary);
@@ -607,7 +609,9 @@ impl Strategy for GridStrategy {
         }}
         
         .row {{
-            display: flex;
+            display: grid;
+            grid-template-columns: 50px 1fr 1fr 1fr;
+            gap: 10px;
             padding: 4px 12px;
             /* position: relative; Removed as no longer needed for depth bar */
         }}
