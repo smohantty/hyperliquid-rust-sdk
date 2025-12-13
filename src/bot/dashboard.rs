@@ -367,6 +367,8 @@ pub fn render_dashboard(status: &StrategyStatus) -> String {
         let chart;
         let candleSeries;
         let loadedCandles = false;
+        let lastCandleFetchTime = 0;
+        let lastCandleData = null; // Track the last candle for live updates
 
         function switchTab(tabName) {{
             // Sidebar tabs
@@ -436,14 +438,15 @@ pub fn render_dashboard(status: &StrategyStatus) -> String {
                     }}).observe(container);
                 }}
                 
-                // Fetch Candles (once for now, or could poll)
-                if (!loadedCandles && data.asset && chart) {{
+                // Fetch Candles (initial + every 10 minutes)
+                const now = Date.now();
+                const shouldFetchCandles = !loadedCandles || (now - lastCandleFetchTime > 10 * 60 * 1000);
+                
+                if (shouldFetchCandles && data.asset && chart) {{
                     try {{
                         const coin = data.asset.split('/')[0];
-                        const now = Date.now();
                         const start = now - (24 * 60 * 60 * 1000); // 1 day
                         
-                        // Use default 15m
                         const url = `/api/candles?coin=${{encodeURIComponent(coin)}}&interval=15m&start=${{start}}&end=${{now}}`;
                         
                         const cRes = await fetch(url);
@@ -452,10 +455,9 @@ pub fn render_dashboard(status: &StrategyStatus) -> String {
                         
                         if (candles.error) {{
                              console.error("API Error:", candles.error);
-                             loadedCandles = true; // Stop retrying on API error
+                             loadedCandles = true;
                         }} else if (Array.isArray(candles)) {{
                             if (candles.length > 0) {{
-                                // Deduplicate by time to prevent LWC errors
                                 const uniqueData = new Map();
                                 candles.forEach(c => {{
                                     const t = c.t / 1000;
@@ -476,9 +478,15 @@ pub fn render_dashboard(status: &StrategyStatus) -> String {
                                     candleSeries.setData(chartData);
                                     chart.timeScale().fitContent();
                                     loadedCandles = true;
+                                    lastCandleFetchTime = now;
+                                    
+                                    // Store last candle for live updates
+                                    if (chartData.length > 0) {{
+                                        lastCandleData = {{ ...chartData[chartData.length - 1] }};
+                                    }}
                                 }} catch (chartErr) {{
                                     console.error("Chart setData error:", chartErr);
-                                    loadedCandles = true; // Stop retrying 
+                                    loadedCandles = true;
                                 }}
                             }} else {{
                                 console.warn("No candles returned for " + coin);
@@ -487,6 +495,25 @@ pub fn render_dashboard(status: &StrategyStatus) -> String {
                         }}
                     }} catch(e) {{
                         console.error("Candle fetch error:", e);
+                    }}
+                }}
+                
+                // Update last candle with current price (live updates)
+                if (loadedCandles && lastCandleData && data.custom && data.custom.current_price) {{
+                    const currentPrice = data.custom.current_price;
+                    if (currentPrice > 0) {{
+                        const updatedCandle = {{
+                            ...lastCandleData,
+                            high: Math.max(lastCandleData.high, currentPrice),
+                            low: Math.min(lastCandleData.low, currentPrice),
+                            close: currentPrice,
+                        }};
+                        
+                        try {{
+                            candleSeries.update(updatedCandle);
+                        }} catch(e) {{
+                            // Silently ignore update errors
+                        }}
                     }}
                 }}
                 
