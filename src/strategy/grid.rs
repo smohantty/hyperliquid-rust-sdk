@@ -200,9 +200,10 @@ impl GridStrategy {
             level.side = side;
         }
 
-        self.log_grid_status(self.initial_price);
+        // self.log_grid_status(self.initial_price);
     }
 
+    #[allow(dead_code)]
     fn log_grid_status(&self, current_price: f64) {
         let p_dec = self.precision.price_decimals as usize;
         let s_dec = self.precision.sz_decimals as usize;
@@ -440,7 +441,7 @@ impl Strategy for GridStrategy {
                 }
             }
 
-            self.log_grid_status(fill.price);
+            // self.log_grid_status(fill.price);
         }
         
         orders
