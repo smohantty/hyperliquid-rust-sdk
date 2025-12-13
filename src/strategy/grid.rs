@@ -456,23 +456,31 @@ impl Strategy for GridStrategy {
         let mut bids = Vec::new();
 
         for (i, level) in self.levels.iter().enumerate() {
-            if let Some(side) = level.side {
-                let dist = (level.price - self.last_price).abs() / self.last_price * 100.0;
-                let has_order = level.order_id.is_some();
-                
-                let item = json!({
-                    "level_idx": i,
-                    "price": level.price,
-                    "size": level.size,
-                    "dist": dist,
-                    "side": side,
-                    "has_order": has_order
-                });
-    
-                match side {
-                    OrderSide::Buy => bids.push(item),
-                    OrderSide::Sell => asks.push(item),
+            let dist = (level.price - self.last_price).abs() / self.last_price * 100.0;
+            let has_order = level.order_id.is_some();
+            
+            // Determine which side this level should be on based on price
+            // If side is None, it's an empty/gap level - assign it based on price vs current
+            let effective_side = level.side.unwrap_or_else(|| {
+                if level.price < self.last_price {
+                    OrderSide::Buy
+                } else {
+                    OrderSide::Sell
                 }
+            });
+            
+            let item = json!({
+                "level_idx": i,
+                "price": level.price,
+                "size": level.size,
+                "dist": dist,
+                "side": effective_side,
+                "has_order": has_order
+            });
+
+            match effective_side {
+                OrderSide::Buy => bids.push(item),
+                OrderSide::Sell => asks.push(item),
             }
         }
         

@@ -606,6 +606,7 @@ pub fn render_dashboard(status: &StrategyStatus) -> String {
                     // Asks
                     for (let i = 0; i < book.asks.length; i++) {{
                         const ask = book.asks[i];
+                        if (i === 0) console.log("Sample ask:", ask); // Debug
                         const sizeDisplay = ask.has_order ? ask.size.toFixed(S_DEC) : '-- --';
                         const opacity = ask.has_order ? '1' : '0.3';
                         html += `<div class="row" style="opacity: ${{opacity}}">
