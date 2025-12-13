@@ -583,7 +583,8 @@ pub fn render_dashboard(status: &StrategyStatus) -> String {
                                 position: 'belowBar',
                                 color: '#9494a8',
                                 shape: 'circle',
-                                text: `B:${{counts.buys}} S:${{counts.sells}}`,
+                                text: `↑${{counts.buys}} ↓${{counts.sells}}`,
+                                size: 2,
                             }});
                         }} else if (hasBuys) {{
                             // Only buys
@@ -592,7 +593,8 @@ pub fn render_dashboard(status: &StrategyStatus) -> String {
                                 position: 'belowBar',
                                 color: '#00c2a2',
                                 shape: 'circle',
-                                text: `${{counts.buys}}`,
+                                text: `↑${{counts.buys}}`,
+                                size: 2,
                             }});
                         }} else if (hasSells) {{
                             // Only sells
@@ -601,7 +603,8 @@ pub fn render_dashboard(status: &StrategyStatus) -> String {
                                 position: 'belowBar',
                                 color: '#ff3b69',
                                 shape: 'circle',
-                                text: `${{counts.sells}}`,
+                                text: `↓${{counts.sells}}`,
+                                size: 2,
                             }});
                         }}
                     }});
