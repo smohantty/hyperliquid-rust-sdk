@@ -58,7 +58,7 @@ pub fn render_dashboard(status: &StrategyStatus) -> String {
             margin: 0;
             height: 100vh;
             display: grid;
-            grid-template-rows: 50px 1fr 350px; /* Header, Main, Bottom */
+            grid-template-rows: 50px 1fr 500px; /* Header, Main, Bottom */
             overflow: hidden;
         }}
 
