@@ -151,8 +151,14 @@ impl BotRunner {
             let server_bot = bot.clone();
             let port = self.config.server.port;
             let host = self.config.server.host.clone();
+            // Wrap info_client in Arc to share with server
+            // We recreate it or clone it? 
+            // Since info_client is not Clone, and we might have used it above.
+            // Actually, we can just arc it here since we don't need it below in run() anymore.
+            let server_info_client = Arc::new(info_client);
+            
             tokio::spawn(async move {
-                super::server::start_server(server_bot, port, host).await;
+                super::server::start_server(server_bot, server_info_client, port, host).await;
             });
         }
 

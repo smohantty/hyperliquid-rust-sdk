@@ -1,4 +1,4 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use alloy::primitives::Address;
 
@@ -99,7 +99,7 @@ pub struct RecentTradesResponse {
     pub hash: String,
 }
 
-#[derive(serde::Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct CandlesSnapshotResponse {
     #[serde(rename = "t")]
     pub time_open: u64,

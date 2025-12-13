@@ -32,7 +32,9 @@ pub fn render_dashboard(status: &StrategyStatus) -> String {
 <head>
     <title>{name} - Grid Terminal</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <script src="https://unpkg.com/lightweight-charts@4.0.1/dist/lightweight-charts.standalone.production.js"></script>
     <style>
+
         :root {{
             --bg-dark: #0d0d12;
             --bg-panel: #16161f;
@@ -105,18 +107,14 @@ pub fn render_dashboard(status: &StrategyStatus) -> String {
             position: relative;
         }}
         
-        .chart-placeholder {{
+        #chartContainer {{
             flex: 1;
-            border: 1px dashed var(--border);
+            width: 100%;
+            height: 100%;
+            border: 1px solid var(--border);
             border-radius: 4px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: var(--text-secondary);
-            font-size: 14px;
-            background: rgba(255,255,255,0.01);
-            flex-direction: column;
-            gap: 10px;
+            overflow: hidden;
+            position: relative;
         }}
 
         /* Bot Info Widget (Floating or embedded in Chart area) */
@@ -298,14 +296,8 @@ pub fn render_dashboard(status: &StrategyStatus) -> String {
                 </div>
             </div>
 
-            <!-- Chart Placeholder -->
-            <div class="chart-placeholder">
-                <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1">
-                    <path d="M3 3v18h18" />
-                    <path d="M18.5 7.5l-4 8-4-4-5.5 5" stroke-linecap="round" stroke-linejoin="round"/>
-                </svg>
-                <span>Live Chart Integration Coming Soon</span>
-            </div>
+            <!-- Chart Container -->
+            <div id="chartContainer"></div>
         </div>
 
         <!-- Right Sidebar (CLOB) -->
@@ -371,6 +363,10 @@ pub fn render_dashboard(status: &StrategyStatus) -> String {
         let P_DEC = {p_dec};
         let S_DEC = {s_dec};
         let firstLoad = true;
+        
+        let chart;
+        let candleSeries;
+        let loadedCandles = false;
 
         function switchTab(tabName) {{
             // Sidebar tabs
@@ -397,6 +393,104 @@ pub fn render_dashboard(status: &StrategyStatus) -> String {
                     S_DEC = data.custom.asset_precision.size_decimals;
                 }}
                 
+                // Initialize Chart if needed
+                if (!chart && data.asset) {{
+                    console.log("Initializing chart for", data.asset);
+                    const container = document.getElementById('chartContainer');
+                    chart = LightweightCharts.createChart(container, {{
+                        layout: {{ 
+                            background: {{ type: 'solid', color: '#16161f' }}, 
+                            textColor: '#9494a8', 
+                        }},
+                        grid: {{
+                            vertLines: {{ color: '#2a2a3a' }},
+                            horzLines: {{ color: '#2a2a3a' }},
+                        }},
+                        timeScale: {{
+                            timeVisible: true,
+                            secondsVisible: false,
+                        }},
+                        crosshair: {{
+                            mode: LightweightCharts.CrosshairMode.Normal,
+                        }},
+                    }});
+                    
+                    try {{
+                        candleSeries = chart.addCandlestickSeries({{
+                            upColor: '#00c2a2',
+                            downColor: '#ff3b69',
+                            borderVisible: false,
+                            wickUpColor: '#00c2a2',
+                            wickDownColor: '#ff3b69',
+                        }});
+                    }} catch (e) {{
+                        console.error("Error adding series. Chart object:", chart);
+                        throw e;
+                    }}
+                    
+                    // Handle Resize
+                    new ResizeObserver(entries => {{
+                        if (entries.length === 0 || entries[0].target !== container) {{ return; }}
+                        const newRect = entries[0].contentRect;
+                        chart.applyOptions({{ width: newRect.width, height: newRect.height }});
+                    }}).observe(container);
+                }}
+                
+                // Fetch Candles (once for now, or could poll)
+                if (!loadedCandles && data.asset && chart) {{
+                    try {{
+                        const coin = data.asset.split('/')[0];
+                        const now = Date.now();
+                        const start = now - (24 * 60 * 60 * 1000); // 1 day
+                        
+                        // Use default 15m
+                        const url = `/api/candles?coin=${{encodeURIComponent(coin)}}&interval=15m&start=${{start}}&end=${{now}}`;
+                        
+                        const cRes = await fetch(url);
+                        if (!cRes.ok) {{ throw new Error("HTTP " + cRes.status); }}
+                        const candles = await cRes.json();
+                        
+                        if (candles.error) {{
+                             console.error("API Error:", candles.error);
+                             loadedCandles = true; // Stop retrying on API error
+                        }} else if (Array.isArray(candles)) {{
+                            if (candles.length > 0) {{
+                                // Deduplicate by time to prevent LWC errors
+                                const uniqueData = new Map();
+                                candles.forEach(c => {{
+                                    const t = c.t / 1000;
+                                    if (!uniqueData.has(t)) {{
+                                        uniqueData.set(t, {{
+                                            time: t,
+                                            open: parseFloat(c.o),
+                                            high: parseFloat(c.h),
+                                            low: parseFloat(c.l),
+                                            close: parseFloat(c.c),
+                                        }});
+                                    }}
+                                }});
+                                
+                                const chartData = Array.from(uniqueData.values()).sort((a,b) => a.time - b.time);
+                                
+                                try {{
+                                    candleSeries.setData(chartData);
+                                    chart.timeScale().fitContent();
+                                    loadedCandles = true;
+                                }} catch (chartErr) {{
+                                    console.error("Chart setData error:", chartErr);
+                                    loadedCandles = true; // Stop retrying 
+                                }}
+                            }} else {{
+                                console.warn("No candles returned for " + coin);
+                                loadedCandles = true;
+                            }}
+                        }}
+                    }} catch(e) {{
+                        console.error("Candle fetch error:", e);
+                    }}
+                }}
+                
+
                 // --- 1. Update Header / Bot Stats ---
                 const pnl = data.realized_pnl - data.total_fees;
                 const pnlEl = document.getElementById('realizedPnl');
@@ -442,6 +536,12 @@ pub fn render_dashboard(status: &StrategyStatus) -> String {
                             Spread: ${{spread.toFixed(P_DEC)}} (${{spreadPct.toFixed(3)}}%) 
                             <span style="color: var(--text-primary); margin-left: 8px">Px: ${{midPrice.toFixed(P_DEC)}}</span>
                         </div>`;
+                        
+                        // Update Chart Realtime Price Line (Optional)
+                        if(candleSeries && !loadedCandles) {{ // Only if candles not loaded or just to show curent price
+                           // LWC doesn't autoupdate candles, but we can update the last candle
+                        }}
+                        
                     }} else {{
                         html += `<div class="spread-row">No Active Spread</div>`;
                     }}
