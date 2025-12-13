@@ -58,7 +58,7 @@ pub fn render_dashboard(status: &StrategyStatus) -> String {
             margin: 0;
             height: 100vh;
             display: grid;
-            grid-template-rows: 50px 1fr 250px; /* Header, Main, Bottom */
+            grid-template-rows: 50px 1fr 350px; /* Header, Main, Bottom */
             overflow: hidden;
         }}
 
@@ -94,7 +94,7 @@ pub fn render_dashboard(status: &StrategyStatus) -> String {
         /* --- Main Area (Chart + Sidebar) --- */
         .main-container {{
             display: grid;
-            grid-template-columns: 1fr 350px; /* Chart area, Side Panel */
+            grid-template-columns: 1fr 500px; /* Chart area, Side Panel */
             overflow: hidden;
         }}
 
