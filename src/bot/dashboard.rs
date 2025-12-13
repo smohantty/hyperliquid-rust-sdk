@@ -577,24 +577,29 @@ pub fn render_dashboard(status: &StrategyStatus) -> String {
                         const hasSells = counts.sells > 0;
                         
                         if (hasBuys && hasSells) {{
-                            // Both buys and sells - show combined marker
+                            // Both buys and sells - show two markers
+                            markers.push({{
+                                time: time,
+                                position: 'aboveBar',
+                                color: '#00c2a2',
+                                shape: 'arrowUp',
+                                text: counts.buys.toString(),
+                            }});
                             markers.push({{
                                 time: time,
                                 position: 'belowBar',
-                                color: '#9494a8',
-                                shape: 'circle',
-                                text: `↑${{counts.buys}} ↓${{counts.sells}}`,
-                                size: 2,
+                                color: '#ff3b69',
+                                shape: 'arrowDown',
+                                text: counts.sells.toString(),
                             }});
                         }} else if (hasBuys) {{
                             // Only buys
                             markers.push({{
                                 time: time,
-                                position: 'belowBar',
+                                position: 'aboveBar',
                                 color: '#00c2a2',
-                                shape: 'circle',
-                                text: `↑${{counts.buys}}`,
-                                size: 2,
+                                shape: 'arrowUp',
+                                text: counts.buys.toString(),
                             }});
                         }} else if (hasSells) {{
                             // Only sells
@@ -602,9 +607,8 @@ pub fn render_dashboard(status: &StrategyStatus) -> String {
                                 time: time,
                                 position: 'belowBar',
                                 color: '#ff3b69',
-                                shape: 'circle',
-                                text: `↓${{counts.sells}}`,
-                                size: 2,
+                                shape: 'arrowDown',
+                                text: counts.sells.toString(),
                             }});
                         }}
                     }});
