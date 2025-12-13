@@ -570,8 +570,8 @@ impl Strategy for GridStrategy {
             z-index: 10;
         }}
         .col {{ flex: 1; text-align: right; z-index: 1; }}
-        .col.price {{ text-align: left; flex: 1.5; }}
-        .col.lvl {{ text-align: left; flex: 0.5; color: var(--text-muted); }}
+        .col.price {{ text-align: left; flex: 1; }}
+        .col.lvl {{ text-align: left; flex: 0.4; color: var(--text-muted); }}
         .col.dist {{ flex: 1; color: var(--text-muted); }}
         
         .book {{
