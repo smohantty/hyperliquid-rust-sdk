@@ -457,21 +457,21 @@ impl Strategy for GridStrategy {
 
         for (i, level) in self.levels.iter().enumerate() {
             if let Some(side) = level.side {
-                // partial order fill logic handling? simplified for now
-                if level.order_id.is_some() {
-                    let dist = (level.price - self.last_price).abs() / self.last_price * 100.0;
-                    let item = json!({
-                        "level_idx": i,
-                        "price": level.price,
-                        "size": level.size,
-                        "dist": dist,
-                        "side": side
-                    });
+                let dist = (level.price - self.last_price).abs() / self.last_price * 100.0;
+                let has_order = level.order_id.is_some();
+                
+                let item = json!({
+                    "level_idx": i,
+                    "price": level.price,
+                    "size": level.size,
+                    "dist": dist,
+                    "side": side,
+                    "has_order": has_order
+                });
     
-                    match side {
-                        OrderSide::Buy => bids.push(item),
-                        OrderSide::Sell => asks.push(item),
-                    }
+                match side {
+                    OrderSide::Buy => bids.push(item),
+                    OrderSide::Sell => asks.push(item),
                 }
             }
         }

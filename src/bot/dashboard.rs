@@ -606,11 +606,13 @@ pub fn render_dashboard(status: &StrategyStatus) -> String {
                     // Asks
                     for (let i = 0; i < book.asks.length; i++) {{
                         const ask = book.asks[i];
-                        html += `<div class="row">
+                        const sizeDisplay = ask.has_order ? ask.size.toFixed(S_DEC) : '-- --';
+                        const opacity = ask.has_order ? '1' : '0.3';
+                        html += `<div class="row" style="opacity: ${{opacity}}">
                             <div class="col lvl-idx">${{ask.level_idx}}</div>
                             <div class="col right ask-price">${{ask.price.toFixed(P_DEC)}}</div>
                             <div class="col right dist">${{ask.dist.toFixed(2)}}%</div>
-                            <div class="col right">${{ask.size.toFixed(S_DEC)}}</div>
+                            <div class="col right">${{sizeDisplay}}</div>
                         </div>`;
                     }}
 
@@ -645,11 +647,13 @@ pub fn render_dashboard(status: &StrategyStatus) -> String {
 
                     // Bids
                     for (const bid of book.bids) {{
-                        html += `<div class="row">
+                        const sizeDisplay = bid.has_order ? bid.size.toFixed(S_DEC) : '-- --';
+                        const opacity = bid.has_order ? '1' : '0.3';
+                        html += `<div class="row" style="opacity: ${{opacity}}">
                             <div class="col lvl-idx">${{bid.level_idx}}</div>
                             <div class="col right bid-price">${{bid.price.toFixed(P_DEC)}}</div>
                             <div class="col right dist">${{bid.dist.toFixed(2)}}%</div>
-                            <div class="col right">${{bid.size.toFixed(S_DEC)}}</div>
+                            <div class="col right">${{sizeDisplay}}</div>
                         </div>`;
                     }}
                     
