@@ -580,34 +580,34 @@ pub fn render_dashboard(status: &StrategyStatus) -> String {
                             // Both buys and sells - show two markers
                             markers.push({{
                                 time: time,
-                                position: 'aboveBar',
+                                position: 'belowBar',
                                 color: '#00c2a2',
-                                shape: 'arrowUp',
+                                shape: 'circle',
                                 text: counts.buys.toString(),
                             }});
                             markers.push({{
                                 time: time,
-                                position: 'belowBar',
+                                position: 'aboveBar',
                                 color: '#ff3b69',
-                                shape: 'arrowDown',
+                                shape: 'circle',
                                 text: counts.sells.toString(),
                             }});
                         }} else if (hasBuys) {{
                             // Only buys
                             markers.push({{
                                 time: time,
-                                position: 'aboveBar',
+                                position: 'belowBar',
                                 color: '#00c2a2',
-                                shape: 'arrowUp',
+                                shape: 'circle',
                                 text: counts.buys.toString(),
                             }});
                         }} else if (hasSells) {{
                             // Only sells
                             markers.push({{
                                 time: time,
-                                position: 'belowBar',
+                                position: 'aboveBar',
                                 color: '#ff3b69',
-                                shape: 'arrowDown',
+                                shape: 'circle',
                                 text: counts.sells.toString(),
                             }});
                         }}
