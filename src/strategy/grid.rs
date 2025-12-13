@@ -469,7 +469,9 @@ impl Strategy for GridStrategy {
                 "levels": self.grid_levels,
                 "range": format!("{:.2} - {:.2}", self.lower_price, self.upper_price),
                 "active_orders": self.active_orders.len(),
+                "active_orders": self.active_orders.len(),
                 "trades": self.trade_count,
+                "current_price": self.last_price,
                 "asset_precision": {
                     "price_decimals": self.precision.price_decimals,
                     "size_decimals": self.precision.sz_decimals
@@ -652,7 +654,17 @@ impl Strategy for GridStrategy {
                     const bestBid = book.bids[0].price;
                     const spread = bestAsk - bestBid;
                     const spreadPct = (spread / bestAsk) * 100;
-                    html += `<div class="spread-row"><span>Spread: ${{spread.toFixed(P_DEC)}} (${{spreadPct.toFixed(4)}}%)</span></div>`;
+                    
+                    // Use actual market price if available, otherwise fallback to order book mid
+                    let midPrice = (bestAsk + bestBid) / 2;
+                    if (data.custom.current_price && data.custom.current_price > 0) {{
+                        midPrice = data.custom.current_price;
+                    }}
+                    
+                    html += `<div class="spread-row">
+                        <span style="color: var(--text-muted)">Spread: ${{spread.toFixed(P_DEC)}} (${{spreadPct.toFixed(3)}}%)</span>
+                        <span style="margin-left: 15px; color: var(--text-primary); font-weight: bold;">Price: ${{midPrice.toFixed(P_DEC)}}</span>
+                    </div>`;
                 }} else {{
                     html += `<div class="spread-row"><span>No Active Spread</span></div>`;
                 }}
