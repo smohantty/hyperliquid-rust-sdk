@@ -446,7 +446,6 @@ impl Strategy for GridStrategy {
         struct BookLevel {
             price: f64,
             size: f64,
-            total: f64,
             level_idx: usize,
         }
 
@@ -459,7 +458,6 @@ impl Strategy for GridStrategy {
                     let bl = BookLevel {
                         price: level.price,
                         size: level.size,
-                        total: 0.0, // Calculated later
                         level_idx: idx,
                     };
                     if side == OrderSide::Sell {
@@ -477,22 +475,6 @@ impl Strategy for GridStrategy {
         // Bids: High -> Low (so highest bidding price is at top visually)
         bids.sort_by(|a, b| b.price.partial_cmp(&a.price).unwrap());
 
-        // 3. Calculate Totals (Accumulate from the "Spread" outwards)
-        
-        let mut acc_ask = 0.0;
-        for ask in asks.iter_mut().rev() {
-            acc_ask += ask.size;
-            ask.total = acc_ask;
-        }
-
-        let mut acc_bid = 0.0;
-        for bid in bids.iter_mut() {
-            acc_bid += bid.size;
-            bid.total = acc_bid;
-        }
-
-        let max_total = acc_ask.max(acc_bid).max(0.0001);
-
         // 4. Generate HTML
         let p_dec = self.precision.price_decimals as usize;
         let s_dec = self.precision.sz_decimals as usize;
@@ -501,17 +483,15 @@ impl Strategy for GridStrategy {
 
         // Render Asks (Red)
         for ask in &asks {
-            let width_pct = (ask.total / max_total) * 100.0;
             let dist_pct = (ask.price - self.last_price) / self.last_price * 100.0;
             let row = format!(
                 r#"<div class="row ask">
-                    <div class="depth-bar" style="width: {:.2}%"></div>
                     <div class="col lvl">{}</div>
                     <div class="col price">{:.*}</div>
                     <div class="col dist">{:.2}%</div>
                     <div class="col size">{:.*}</div>
                 </div>"#,
-                width_pct, ask.level_idx, p_dec, ask.price, dist_pct, s_dec, ask.size
+                ask.level_idx, p_dec, ask.price, dist_pct, s_dec, ask.size
             );
             rows_html.push_str(&row);
         }
@@ -533,17 +513,15 @@ impl Strategy for GridStrategy {
 
         // Render Bids (Green)
         for bid in &bids {
-            let width_pct = (bid.total / max_total) * 100.0;
             let dist_pct = (bid.price - self.last_price) / self.last_price * 100.0;
             let row = format!(
                 r#"<div class="row bid">
-                    <div class="depth-bar" style="width: {:.2}%"></div>
                     <div class="col lvl">{}</div>
                     <div class="col price">{:.*}</div>
                     <div class="col dist">{:.2}%</div>
                     <div class="col size">{:.*}</div>
                 </div>"#,
-                width_pct, bid.level_idx, p_dec, bid.price, dist_pct, s_dec, bid.size
+                bid.level_idx, p_dec, bid.price, dist_pct, s_dec, bid.size
             );
             rows_html.push_str(&row);
         }
@@ -631,18 +609,9 @@ impl Strategy for GridStrategy {
         .row {{
             display: flex;
             padding: 4px 12px;
-            position: relative; /* For depth bar absolute pos */
+            /* position: relative; Removed as no longer needed for depth bar */
         }}
         .row:hover {{ background: #2a2a3a; }}
-        
-        .depth-bar {{
-            position: absolute;
-            top: 2px; bottom: 2px; right: 0;
-            opacity: 0.3;
-            z-index: 0;
-        }}
-        .ask .depth-bar {{ background: var(--red); }}
-        .bid .depth-bar {{ background: var(--green); }}
         
         .ask .price {{ color: var(--red); }}
         .bid .price {{ color: var(--green); }}
