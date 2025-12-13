@@ -189,14 +189,15 @@ pub fn render_dashboard(status: &StrategyStatus) -> String {
         .lvl-idx {{ color: var(--text-secondary); opacity: 0.5; }}
 
         .spread-row {{
+            display: grid;
+            grid-template-columns: 40px 1fr 1fr 1fr;
+            gap: 8px;
             padding: 6px;
-            text-align: center;
             font-size: 11px;
             font-family: 'JetBrains Mono', monospace;
             border-top: 1px solid var(--border);
             border-bottom: 1px solid var(--border);
             background: rgba(255,255,255,0.02);
-            color: var(--text-secondary);
         }}
         
         .book-scroll-area {{
