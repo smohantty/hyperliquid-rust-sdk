@@ -427,38 +427,27 @@ impl Strategy for GridStrategy {
     }
     
     fn status(&self) -> StrategyStatus {
-        StrategyStatus::new(self.name(), &self.asset)
-            .with_status("Running")
-            .with_position(self.position)
-            .with_pnl(self.realized_pnl, 0.0, self.total_fees)
-            .with_custom(serde_json::json!({
-                "levels": self.grid_levels,
-                "range": format!("{:.2} - {:.2}", self.lower_price, self.upper_price),
-                "active_orders": self.active_orders.len(),
-                "trades": self.trade_count
-            }))
-    }
-
-    fn render_dashboard(&self) -> Option<String> {
-        let status = self.status();
-        
-        // 1. Gather Orders
+        // Gather and Sort Orders for API
+        #[derive(serde::Serialize)]
         struct BookLevel {
             price: f64,
             size: f64,
             level_idx: usize,
+            dist: f64,
         }
-
+        
         let mut asks: Vec<BookLevel> = Vec::new();
         let mut bids: Vec<BookLevel> = Vec::new();
 
         for (idx, level) in self.levels.iter().enumerate() {
             if let Some(side) = level.side {
                 if level.order_id.is_some() {
+                    let dist_pct = (level.price - self.last_price) / self.last_price * 100.0;
                     let bl = BookLevel {
                         price: level.price,
                         size: level.size,
                         level_idx: idx,
+                        dist: dist_pct,
                     };
                     if side == OrderSide::Sell {
                         asks.push(bl);
@@ -468,71 +457,36 @@ impl Strategy for GridStrategy {
                 }
             }
         }
-
-        // 2. Sort
-        // Asks: High -> Low (so lowest asking price is at bottom visually)
+        
         asks.sort_by(|a, b| b.price.partial_cmp(&a.price).unwrap());
-        // Bids: High -> Low (so highest bidding price is at top visually)
         bids.sort_by(|a, b| b.price.partial_cmp(&a.price).unwrap());
 
-        // 4. Generate HTML
-        let p_dec = self.precision.price_decimals as usize;
-        let s_dec = self.precision.sz_decimals as usize;
+        StrategyStatus::new(self.name(), &self.asset)
+            .with_status("Running")
+            .with_position(self.position)
+            .with_pnl(self.realized_pnl, 0.0, self.total_fees)
+            .with_custom(serde_json::json!({
+                "levels": self.grid_levels,
+                "range": format!("{:.2} - {:.2}", self.lower_price, self.upper_price),
+                "active_orders": self.active_orders.len(),
+                "trades": self.trade_count,
+                "book": {
+                    "asks": asks,
+                    "bids": bids
+                }
+            }))
+    }
 
-        let mut rows_html = String::new();
+    fn render_dashboard(&self) -> Option<String> {
+        let status = self.status();
+        let p_dec = self.precision.price_decimals;
+        let s_dec = self.precision.sz_decimals;
 
-        // Render Asks (Red)
-        for ask in &asks {
-            let dist_pct = (ask.price - self.last_price) / self.last_price * 100.0;
-            let row = format!(
-                r#"<div class="row ask">
-                    <div class="col lvl">{}</div>
-                    <div class="col price">{:.*}</div>
-                    <div class="col dist">{:.2}%</div>
-                    <div class="col size">{:.*}</div>
-                </div>"#,
-                ask.level_idx, p_dec, ask.price, dist_pct, s_dec, ask.size
-            );
-            rows_html.push_str(&row);
-        }
-
-        // Spread / Gap
-        let spread_html = if let (Some(best_ask), Some(best_bid)) = (asks.last(), bids.first()) {
-            let spread = best_ask.price - best_bid.price;
-            let spread_pct = (spread / best_ask.price) * 100.0;
-            format!(
-                r#"<div class="spread-row">
-                    <span>Spread: {:.*} ({:.4}%)</span>
-                </div>"#,
-                p_dec, spread, spread_pct
-            )
-        } else {
-             r#"<div class="spread-row"><span>No Active Spread</span></div>"#.to_string()
-        };
-        rows_html.push_str(&spread_html);
-
-        // Render Bids (Green)
-        for bid in &bids {
-            let dist_pct = (bid.price - self.last_price) / self.last_price * 100.0;
-            let row = format!(
-                r#"<div class="row bid">
-                    <div class="col lvl">{}</div>
-                    <div class="col price">{:.*}</div>
-                    <div class="col dist">{:.2}%</div>
-                    <div class="col size">{:.*}</div>
-                </div>"#,
-                bid.level_idx, p_dec, bid.price, dist_pct, s_dec, bid.size
-            );
-            rows_html.push_str(&row);
-        }
-
-        // Return full page
         Some(format!(
             r##"<!DOCTYPE html>
 <html>
 <head>
     <title>{name} - Grid CLOB</title>
-    <meta http-equiv="refresh" content="2">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
     <style>
         :root {{
@@ -542,8 +496,6 @@ impl Strategy for GridStrategy {
             --text-muted: #5a5a70;
             --green: #00d4aa;
             --red: #ff4d6a;
-            --green-bg: rgba(0, 212, 170, 0.15);
-            --red-bg: rgba(255, 77, 106, 0.15);
         }}
         * {{ margin: 0; padding: 0; box-sizing: border-box; }}
         body {{
@@ -572,7 +524,7 @@ impl Strategy for GridStrategy {
             z-index: 10;
         }}
         .col {{ text-align: right; z-index: 1; }}
-        .col.price {{ text-align: right; }} /* Align price to right for consistency */
+        .col.price {{ text-align: right; }} 
         .col.lvl {{ text-align: left; color: var(--text-muted); }}
         .col.dist {{ color: var(--text-muted); }}
         
@@ -585,7 +537,7 @@ impl Strategy for GridStrategy {
             font-size: 13px;
             display: flex;
             flex-direction: column;
-            max-height: 80vh; /* Fixed height relative to viewport */
+            max-height: 80vh;
         }}
 
         .clob-content {{
@@ -593,27 +545,16 @@ impl Strategy for GridStrategy {
             flex: 1;
         }}
 
-        /* Custom Scrollbar */
-        .clob-content::-webkit-scrollbar {{
-            width: 8px;
-        }}
-        .clob-content::-webkit-scrollbar-track {{
-            background: var(--bg-secondary);
-        }}
-        .clob-content::-webkit-scrollbar-thumb {{
-            background: #2a2a3a;
-            border-radius: 4px;
-        }}
-        .clob-content::-webkit-scrollbar-thumb:hover {{
-            background: #3a3a4a;
-        }}
+        .clob-content::-webkit-scrollbar {{ width: 8px; }}
+        .clob-content::-webkit-scrollbar-track {{ background: var(--bg-secondary); }}
+        .clob-content::-webkit-scrollbar-thumb {{ background: #2a2a3a; border-radius: 4px; }}
+        .clob-content::-webkit-scrollbar-thumb:hover {{ background: #3a3a4a; }}
         
         .row {{
             display: grid;
             grid-template-columns: 50px 1fr 1fr 1fr;
             gap: 10px;
             padding: 4px 12px;
-            /* position: relative; Removed as no longer needed for depth bar */
         }}
         .row:hover {{ background: #2a2a3a; }}
         
@@ -635,11 +576,11 @@ impl Strategy for GridStrategy {
         <header>
             <div>
                 <h1>{name} / {asset}</h1>
-                <div class="stats">{levels} Levels | Range: {range}</div>
+                <div class="stats" id="rangeInfo">{levels} Levels | Range: {range}</div>
             </div>
             <div style="text-align: right">
-                <div>PnL: <span style="color: {pnl_color}">${pnl:.2}</span></div>
-                <div class="stats">Pos: {pos:.4}</div>
+                <div>PnL: <span id="pnlVal" style="color: {pnl_color}">${pnl:.2}</span></div>
+                <div class="stats">Pos: <span id="posVal">{pos:.4}</span></div>
             </div>
         </header>
 
@@ -651,24 +592,97 @@ impl Strategy for GridStrategy {
                 <div class="col">Size</div>
             </div>
             <div class="clob-content" id="clobContent">
-                {rows_html}
+                <!-- Content via JS -->
+                 <div style="text-align:center; padding: 20px; color: var(--text-muted)">Loading...</div>
             </div>
         </div>
     </div>
     
     <script>
-        // Auto-center on the spread (Existing script)
-        window.onload = function() {{
-            const container = document.getElementById('clobContent');
-            const spread = document.querySelector('.spread-row');
-            
-            if (container && spread) {{
-                const topPos = spread.offsetTop;
-                const containerHeight = container.clientHeight;
-                const spreadHeight = spread.clientHeight;
-                container.scrollTop = topPos - (containerHeight / 2) + (spreadHeight / 2);
+        const P_DEC = {p_dec};
+        const S_DEC = {s_dec};
+        let firstLoad = true;
+
+        async function updateDashboard() {{
+            try {{
+                const res = await fetch('/api/status');
+                const data = await res.json();
+                
+                // Update Header Stats
+                const pnl = data.pnl_quote;
+                const pos = data.position;
+                const pnlEl = document.getElementById('pnlVal');
+                pnlEl.innerText = '$' + pnl.toFixed(2);
+                pnlEl.style.color = pnl >= 0 ? 'var(--green)' : 'var(--red)';
+                document.getElementById('posVal').innerText = pos.toFixed(4);
+                
+                // Update Book
+                // We reconstruct the HTML string and replace innerHTML.
+                // This is fast enough for 100 levels active.
+                
+                const book = data.custom.book;
+                if (!book) return;
+
+                let html = '';
+                
+                // Asks
+                for (const ask of book.asks) {{
+                    html += `<div class="row ask">
+                        <div class="col lvl">${{ask.level_idx}}</div>
+                        <div class="col price">${{ask.price.toFixed(P_DEC)}}</div>
+                        <div class="col dist">${{ask.dist.toFixed(2)}}%</div>
+                        <div class="col size">${{ask.size.toFixed(S_DEC)}}</div>
+                    </div>`;
+                }}
+
+                // Spread
+                if (book.asks.length > 0 && book.bids.length > 0) {{
+                    const bestAsk = book.asks[book.asks.length - 1].price;
+                    const bestBid = book.bids[0].price;
+                    const spread = bestAsk - bestBid;
+                    const spreadPct = (spread / bestAsk) * 100;
+                    html += `<div class="spread-row"><span>Spread: ${{spread.toFixed(P_DEC)}} (${{spreadPct.toFixed(4)}}%)</span></div>`;
+                }} else {{
+                    html += `<div class="spread-row"><span>No Active Spread</span></div>`;
+                }}
+
+                // Bids
+                for (const bid of book.bids) {{
+                    html += `<div class="row bid">
+                        <div class="col lvl">${{bid.level_idx}}</div>
+                        <div class="col price">${{bid.price.toFixed(P_DEC)}}</div>
+                        <div class="col dist">${{bid.dist.toFixed(2)}}%</div>
+                        <div class="col size">${{bid.size.toFixed(S_DEC)}}</div>
+                    </div>`;
+                }}
+
+                const container = document.getElementById('clobContent');
+                
+                // Check if user is scrolling (naive check: if not at top/centered, maybe don't disrupt?)
+                // Actually replacing innerHTML keeps scroll position mostly intact if height doesn't drastically change.
+                // But auto-centering logic should only run once.
+                
+                container.innerHTML = html;
+
+                if (firstLoad) {{
+                    const spreadEl = document.querySelector('.spread-row');
+                    if (spreadEl) {{
+                        const topPos = spreadEl.offsetTop;
+                        const containerHeight = container.clientHeight;
+                        const spreadHeight = spreadEl.clientHeight;
+                        container.scrollTop = topPos - (containerHeight / 2) + (spreadHeight / 2);
+                    }}
+                    firstLoad = false;
+                }}
+            }} catch (e) {{
+                console.error("Failed to update dashboard", e);
             }}
-        }};
+        }}
+
+        // Initial Load
+        updateDashboard();
+        // Poll every 1s
+        setInterval(updateDashboard, 1000);
     </script>
 </body>
 </html>"##,
@@ -679,7 +693,8 @@ impl Strategy for GridStrategy {
             pnl_color = if status.net_profit() >= 0.0 { "var(--green)" } else { "var(--red)" },
             pnl = status.net_profit(),
             pos = status.position,
-            rows_html = rows_html
+            p_dec = p_dec,
+            s_dec = s_dec
         ))
     }
 }
