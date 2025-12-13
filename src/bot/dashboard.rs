@@ -428,7 +428,7 @@ pub fn render_dashboard(status: &StrategyStatus) -> String {
                             wickDownColor: '#ff3b69',
                             lastValueVisible: true,
                             priceLineVisible: true,
-                            priceLineColor: '#00c2ff',
+                            priceLineColor: '#ff8c00',
                             priceLineWidth: 1,
                             priceLineStyle: 2, // Dashed
                             priceFormat: {{
