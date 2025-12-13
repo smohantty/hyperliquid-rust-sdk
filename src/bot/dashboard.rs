@@ -591,8 +591,8 @@ pub fn render_dashboard(status: &StrategyStatus) -> String {
                         // Create new current price line
                         window.currentPriceLine = candleSeries.createPriceLine({{
                             price: midPrice,
-                            color: '#00c2ff',
-                            lineWidth: 1,
+                            color: '#ffd700',
+                            lineWidth: 2,
                             lineStyle: 0, // Solid
                             axisLabelVisible: true,
                             title: 'Current',
