@@ -583,20 +583,33 @@ pub fn render_dashboard(status: &StrategyStatus) -> String {
                         const bestBid = book.bids[0].price;
                         const midPrice = (bestAsk + bestBid) / 2;
                         
+                        console.log("Creating current price line at:", midPrice);
+                        
                         // Remove old current price line if exists
                         if (window.currentPriceLine) {{
-                            try {{ candleSeries.removePriceLine(window.currentPriceLine); }} catch(e) {{}}
+                            try {{ 
+                                candleSeries.removePriceLine(window.currentPriceLine); 
+                            }} catch(e) {{
+                                console.error("Error removing old price line:", e);
+                            }}
                         }}
                         
                         // Create new current price line
-                        window.currentPriceLine = candleSeries.createPriceLine({{
-                            price: midPrice,
-                            color: '#ffd700',
-                            lineWidth: 2,
-                            lineStyle: 0, // Solid
-                            axisLabelVisible: true,
-                            title: 'Current',
-                        }});
+                        try {{
+                            window.currentPriceLine = candleSeries.createPriceLine({{
+                                price: midPrice,
+                                color: '#ffd700',
+                                lineWidth: 2,
+                                lineStyle: 0, // Solid
+                                axisLabelVisible: true,
+                                title: 'Current',
+                            }});
+                            console.log("Current price line created successfully");
+                        }} catch(e) {{
+                            console.error("Error creating current price line:", e);
+                        }}
+                    }} else {{
+                        console.warn("Cannot create current price line - missing order book data");
                     }}
                 }}
 
