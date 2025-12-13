@@ -317,8 +317,8 @@ impl GridStrategy {
                     self.active_orders.insert(order_id, (idx, side));
                     orders.push(req);
                     
-                    let side_str = if side == OrderSide::Buy { "BUY " } else { "SELL" };
-                    info!("Lvl {:02} | {} | {:.*} | {:.*}   <<< PLACING ORDER (Filling Gap)", idx, side_str, p_dec, level.price, s_dec, level.size);
+                    // let side_str = if side == OrderSide::Buy { "BUY " } else { "SELL" };
+                    // info!("Lvl {:02} | {} | {:.*} | {:.*}   <<< PLACING ORDER (Filling Gap)", idx, side_str, p_dec, level.price, s_dec, level.size);
                 }
             }
         }
