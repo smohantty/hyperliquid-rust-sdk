@@ -547,63 +547,31 @@ pub fn render_dashboard(status: &StrategyStatus) -> String {
                     
                     const book = data.custom.book;
                     
-                    // Calculate current mid-price
-                    let midPrice = null;
-                    if (book.asks && book.asks.length > 0 && book.bids && book.bids.length > 0) {{
-                        const bestAsk = book.asks[book.asks.length - 1].price;
-                        const bestBid = book.bids[0].price;
-                        midPrice = (bestAsk + bestBid) / 2;
-                    }}
-                    
-                    // Collect all grid levels
-                    const allLevels = [];
-                    if (book.bids && Array.isArray(book.bids)) {{
-                        book.bids.forEach(bid => allLevels.push({{ price: bid.price, side: 'buy' }}));
-                    }}
-                    if (book.asks && Array.isArray(book.asks)) {{
-                        book.asks.forEach(ask => allLevels.push({{ price: ask.price, side: 'sell' }}));
-                    }}
-                    
-                    // Find closest level to current price
-                    let closestLevel = null;
-                    if (midPrice && allLevels.length > 0) {{
-                        let minDiff = Infinity;
-                        allLevels.forEach(level => {{
-                            const diff = Math.abs(level.price - midPrice);
-                            if (diff < minDiff) {{
-                                minDiff = diff;
-                                closestLevel = level.price;
-                            }}
-                        }});
-                    }}
-                    
-                    // Draw Buy levels (green, or yellow if closest)
+                    // Draw Buy levels (green)
                     if (book.bids && Array.isArray(book.bids)) {{
                         book.bids.forEach(bid => {{
-                            const isClosest = closestLevel && Math.abs(bid.price - closestLevel) < 0.001;
                             const line = candleSeries.createPriceLine({{
                                 price: bid.price,
-                                color: isClosest ? '#ffd700' : '#00c2a2',
-                                lineWidth: isClosest ? 2 : 1,
+                                color: '#00c2a2',
+                                lineWidth: 1,
                                 lineStyle: 2, // Dashed
-                                axisLabelVisible: isClosest,
-                                title: isClosest ? 'Px' : '',
+                                axisLabelVisible: false,
+                                title: '',
                             }});
                             window.gridPriceLines.push(line);
                         }});
                     }}
                     
-                    // Draw Sell levels (red, or yellow if closest)
+                    // Draw Sell levels (red)
                     if (book.asks && Array.isArray(book.asks)) {{
                         book.asks.forEach(ask => {{
-                            const isClosest = closestLevel && Math.abs(ask.price - closestLevel) < 0.001;
                             const line = candleSeries.createPriceLine({{
                                 price: ask.price,
-                                color: isClosest ? '#ffd700' : '#ff3b69',
-                                lineWidth: isClosest ? 2 : 1,
+                                color: '#ff3b69',
+                                lineWidth: 1,
                                 lineStyle: 2, // Dashed
-                                axisLabelVisible: isClosest,
-                                title: isClosest ? 'Px' : '',
+                                axisLabelVisible: false,
+                                title: '',
                             }});
                             window.gridPriceLines.push(line);
                         }});
