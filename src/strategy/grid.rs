@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::time::{SystemTime, UNIX_EPOCH};
 use log::{info, warn, error};
 use serde::{Deserialize, Serialize};
@@ -6,6 +6,14 @@ use serde_json::Value;
 
 use super::{Strategy, StrategyFactory, StrategyStatus};
 use crate::market::{OrderFill, OrderRequest, OrderSide, AssetPrecision};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TradeRecord {
+    pub price: f64,
+    pub size: f64,
+    pub side: OrderSide,
+    pub time: u64, // Unix timestamp in seconds
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum GridMode {
@@ -44,6 +52,9 @@ pub struct GridStrategy {
     trade_count: u32,
     total_fees: f64,
     
+    /// Recent trades for dashboard
+    recent_trades: VecDeque<TradeRecord>,
+    
     /// Initial price used to determine buy/sell sides
     initial_price: f64,
     /// Last seen market price (for dashboard)
@@ -81,6 +92,7 @@ impl GridStrategy {
             realized_pnl: 0.0,
             trade_count: 0,
             total_fees: 0.0,
+            recent_trades: VecDeque::with_capacity(50),
             initial_price,
             last_price: initial_price,
             initial_placement_done: false,
@@ -371,6 +383,18 @@ impl Strategy for GridStrategy {
                     red, level_idx, p_dec, level_price, s_dec, fill.qty, p_dec, fill.price, reset);
             }
             
+            // Record Trade
+            let trade = TradeRecord {
+                price: fill.price,
+                size: fill.qty,
+                side: if side.is_buy() { OrderSide::Buy } else { OrderSide::Sell },
+                time: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs(),
+            };
+            self.recent_trades.push_front(trade);
+            if self.recent_trades.len() > 50 {
+                self.recent_trades.pop_back();
+            }
+            
             // NEW LOGIC: Place counter-order based on filled level
             // If BUY filled at i, place SELL at i+1
             // If SELL filled at i, place BUY at i-1
@@ -472,6 +496,7 @@ impl Strategy for GridStrategy {
                 "active_orders": self.active_orders.len(),
                 "trades": self.trade_count,
                 "current_price": self.last_price,
+                "current_price": self.last_price,
                 "asset_precision": {
                     "price_decimals": self.precision.price_decimals,
                     "size_decimals": self.precision.sz_decimals
@@ -479,7 +504,8 @@ impl Strategy for GridStrategy {
                 "book": {
                     "asks": asks,
                     "bids": bids
-                }
+                },
+                "recent_trades": self.recent_trades
             }))
     }
 
@@ -500,106 +526,289 @@ impl Strategy for GridStrategy {
             --bg-secondary: #0a0a0f;
             --text-primary: #ffffff;
             --text-muted: #5a5a70;
-            --green: #00d4aa;
-            --red: #ff4d6a;
+            --text-dim: #2d2d3d;
+            --buy-color: #00bfa5;
+            --buy-bg: rgba(0, 191, 165, 0.12);
+            --sell-color: #ff3b69;
+            --sell-bg: rgba(255, 59, 105, 0.12);
+            --border-color: #1e1e2d;
         }}
-        * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+
         body {{
-            font-family: 'Inter', sans-serif;
-            background: var(--bg-primary);
+            background-color: var(--bg-secondary);
             color: var(--text-primary);
+            font-family: 'Inter', sans-serif;
+            margin: 0;
             padding: 20px;
+            height: 100vh;
+            box-sizing: border-box;
+            display: flex;
+            justify-content: center;
+            align-items: center;
         }}
-        .container {{ max-width: 700px; margin: 0 auto; }}
+
+        .dashboard-container {{
+            background-color: var(--bg-primary);
+            width: 480px;
+            height: 700px;
+            border-radius: 8px;
+            border: 1px solid var(--border-color);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+        }}
         
-        header {{ margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center; }}
-        h1 {{ font-size: 18px; }}
-        .stats {{ font-size: 13px; color: var(--text-muted); }}
+        /* Header */
+        .dash-header {{
+            padding: 15px;
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }}
         
+        .strategy-info h2 {{
+            margin: 0;
+            font-size: 16px;
+            font-weight: 600;
+        }}
+        
+        .strategy-info .meta {{
+            font-size: 11px;
+            color: var(--text-muted);
+            margin-top: 4px;
+        }}
+
+        .stats .stat-row {{
+            text-align: right;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 13px;
+        }}
+        
+        .pnl-val {{
+            color: {pnl_color};
+            font-weight: 600;
+        }}
+
+        /* Tabs */
+        .tabs {{
+            display: flex;
+            border-bottom: 1px solid var(--border-color);
+            background: var(--bg-primary);
+        }}
+        
+        .tab {{
+            padding: 12px 20px;
+            cursor: pointer;
+            color: var(--text-muted);
+            font-size: 13px;
+            font-weight: 500;
+            position: relative;
+            flex: 1;
+            text-align: center;
+        }}
+        
+        .tab:hover {{
+            color: var(--text-primary);
+        }}
+        
+        .tab.active {{
+            color: var(--text-primary);
+        }}
+        
+        .tab.active::after {{
+            content: '';
+            position: absolute;
+            bottom: -1px;
+            left: 0;
+            width: 100%;
+            height: 2px;
+            background: #00c2ff;
+        }}
+        
+        /* Tab Content Area */
+        .tab-content {{
+            flex: 1;
+            overflow: hidden;
+            display: none;
+            flex-direction: column;
+        }}
+        
+        .tab-content.active {{
+            display: flex;
+        }}
+
+        /* --- Order Book Tab Styles --- */
+        .book-toolbar {{
+            padding: 12px;
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: var(--bg-primary);
+            z-index: 10;
+        }}
+        
+        .asset-title {{
+            font-weight: 600;
+            font-size: 14px;
+        }}
+
+        /* CLOB Header */
         .clob-header {{
             display: grid;
             grid-template-columns: 50px 1fr 1fr 1fr;
             gap: 10px;
             padding: 8px 12px;
-            font-size: 12px;
+            font-size: 11px;
             color: var(--text-muted);
-            border-bottom: 1px solid #2a2a3a;
-            background: var(--bg-secondary);
-            position: sticky;
-            top: 0;
-            z-index: 10;
-        }}
-        .col {{ text-align: right; z-index: 1; }}
-        .col.price {{ text-align: right; }} 
-        .col.lvl {{ text-align: left; color: var(--text-muted); }}
-        .col.dist {{ color: var(--text-muted); }}
-        
-        .book {{
-            background: var(--bg-secondary);
-            border: 1px solid #2a2a3a;
-            border-radius: 8px;
-            overflow: hidden;
             font-family: 'JetBrains Mono', monospace;
-            font-size: 13px;
-            display: flex;
-            flex-direction: column;
-            max-height: 80vh;
+            border-bottom: 1px solid var(--border-color);
         }}
-
-        .clob-content {{
-            overflow-y: auto;
-            flex: 1;
-        }}
-
-        .clob-content::-webkit-scrollbar {{ width: 8px; }}
-        .clob-content::-webkit-scrollbar-track {{ background: var(--bg-secondary); }}
-        .clob-content::-webkit-scrollbar-thumb {{ background: #2a2a3a; border-radius: 4px; }}
-        .clob-content::-webkit-scrollbar-thumb:hover {{ background: #3a3a4a; }}
         
+        .col.right {{ text-align: right; }}
+
+        /* Scrollable Book Area */
+        .book-scroll-area {{
+            flex: 1;
+            overflow-y: auto;
+            scrollbar-width: thin;
+            scrollbar-color: var(--border-color) transparent;
+            position: relative;
+        }}
+
+        .book-container {{
+            /* Ensure content can grow */
+            min-height: 100%; 
+        }}
+
         .row {{
             display: grid;
             grid-template-columns: 50px 1fr 1fr 1fr;
             gap: 10px;
             padding: 4px 12px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 12px;
+            line-height: 1.5;
+            cursor: default;
         }}
-        .row:hover {{ background: #2a2a3a; }}
         
-        .ask .price {{ color: var(--red); }}
-        .bid .price {{ color: var(--green); }}
+        .row:hover {{
+            background-color: rgba(255,255,255,0.02);
+        }}
         
+        .ask-price {{ color: var(--sell-color); }}
+        .bid-price {{ color: var(--buy-color); }}
+        .lvl-idx {{ color: var(--text-muted); opacity: 0.5; }}
+        .dist {{ color: var(--text-muted); }}
+
+        /* Ask Background logic usually handled by JS or simple gradient, 
+           here we just text color for simplicity or add a bg div */
+
         .spread-row {{
-            text-align: center;
             padding: 8px 0;
-            color: var(--text-muted);
+            text-align: center;
             font-size: 11px;
-            border-top: 1px solid #2a2a3a;
-            border-bottom: 1px solid #2a2a3a;
+            color: var(--text-muted);
+            font-family: 'JetBrains Mono', monospace;
+            border-top: 1px solid rgba(255,255,255,0.05);
+            border-bottom: 1px solid rgba(255,255,255,0.05);
+            margin: 5px 0;
+            background: rgba(255,255,255,0.01);
         }}
+
+        /* --- Trades Tab Styles --- */
+        .trades-table {{
+            width: 100%;
+            border-collapse: collapse;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 12px;
+        }}
+        
+        .trades-table th {{
+            text-align: right;
+            padding: 8px 12px;
+            color: var(--text-muted);
+            font-weight: normal;
+            font-size: 11px;
+            border-bottom: 1px solid var(--border-color);
+            position: sticky;
+            top: 0;
+            background: var(--bg-primary);
+        }}
+        
+        .trades-table td {{
+            padding: 6px 12px;
+            text-align: right;
+            border-bottom: 1px solid rgba(255,255,255,0.03);
+        }}
+        
+        .trades-table tr:hover td {{
+            background: rgba(255,255,255,0.02);
+        }}
+        
+        .trade-buy {{ color: var(--buy-color); }}
+        .trade-sell {{ color: var(--sell-color); }}
+
     </style>
 </head>
 <body>
-    <div class="container">
-        <header>
-            <div>
-                <h1>{name} / {asset}</h1>
-                <div class="stats" id="rangeInfo">{levels} Levels | Range: {range}</div>
+    <div class="dashboard-container">
+        <!-- Header -->
+        <div class="dash-header">
+            <div class="strategy-info">
+                <h2>{name} / {asset}</h2>
+                <div class="meta">{levels} Levels | Range: {range}</div>
             </div>
-            <div style="text-align: right">
-                <div>PnL: <span id="pnlVal" style="color: {pnl_color}">${pnl:.2}</span></div>
-                <div class="stats">Pos: <span id="posVal">{pos:.4}</span></div>
+            <div class="stats">
+                <div class="stat-row">PnL: <span class="pnl-val" id="pnlVal">${pnl:.2}</span></div>
+                <div class="stat-row">Pos: <span id="posVal">{pos:.4}</span></div>
             </div>
-        </header>
+        </div>
+        
+        <!-- Tabs -->
+        <div class="tabs">
+            <div class="tab active" onclick="switchTab('book')">Order Book</div>
+            <div class="tab" onclick="switchTab('trades')">Trades</div>
+        </div>
 
-        <div class="book">
-            <div class="clob-header">
-                <div class="col lvl">Lvl</div>
-                <div class="col price">Price</div>
-                <div class="col dist">Dist%</div>
-                <div class="col">Size</div>
+        <!-- Order Book Tab -->
+        <div id="tab-book" class="tab-content active">
+            <div class="book-toolbar">
+                <div class="asset-title">{asset}</div>
+                <!-- Precision selector could go here -->
             </div>
-            <div class="clob-content" id="clobContent">
-                <!-- Content via JS -->
-                 <div style="text-align:center; padding: 20px; color: var(--text-muted)">Loading...</div>
+            
+            <div class="clob-header">
+                <div class="col">Lvl</div>
+                <div class="col right">Price</div>
+                <div class="col right">Dist%</div>
+                <div class="col right">Size</div>
+            </div>
+            
+            <div class="book-scroll-area">
+                <div id="bookContainer" class="book-container">
+                    <div style="padding: 20px; text-align: center; color: var(--text-muted)">Loading Grid...</div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Trades Tab -->
+        <div id="tab-trades" class="tab-content">
+             <div class="book-scroll-area">
+                <table class="trades-table">
+                    <thead>
+                        <tr>
+                            <th>Price</th>
+                            <th>Size</th>
+                            <th>Time</th>
+                        </tr>
+                    </thead>
+                    <tbody id="tradesBody">
+                        <!-- Trades injected here -->
+                    </tbody>
+                </table>
             </div>
         </div>
     </div>
@@ -609,6 +818,22 @@ impl Strategy for GridStrategy {
         let P_DEC = {p_dec};
         let S_DEC = {s_dec};
         let firstLoad = true;
+
+        function switchTab(tabName) {{
+            // Remove active class from all tabs
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            // Hide all tab contents
+            document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+            
+            // Activate selected
+            if (tabName === 'book') {{
+                document.querySelector('.tabs .tab:nth-child(1)').classList.add('active');
+                document.getElementById('tab-book').classList.add('active');
+            }} else {{
+                document.querySelector('.tabs .tab:nth-child(2)').classList.add('active');
+                document.getElementById('tab-trades').classList.add('active');
+            }}
+        }}
 
         async function updateDashboard() {{
             try {{
@@ -626,25 +851,21 @@ impl Strategy for GridStrategy {
                 const pos = data.position;
                 const pnlEl = document.getElementById('pnlVal');
                 pnlEl.innerText = '$' + pnl.toFixed(2);
-                pnlEl.style.color = pnl >= 0 ? 'var(--green)' : 'var(--red)';
+                pnlEl.style.color = pnl >= 0 ? 'var(--buy-color)' : 'var(--sell-color)';
                 document.getElementById('posVal').innerText = pos.toFixed(4);
-                
-                // Update Book
-                // We reconstruct the HTML string and replace innerHTML.
-                // This is fast enough for 100 levels active.
-                
-                const book = data.custom.book;
-                if (!book) return;
 
+                // --- Render Order Book ---
+                const book = data.custom.book;
                 let html = '';
                 
-                // Asks
-                for (const ask of book.asks) {{
-                    html += `<div class="row ask">
-                        <div class="col lvl">${{ask.level_idx}}</div>
-                        <div class="col price">${{ask.price.toFixed(P_DEC)}}</div>
-                        <div class="col dist">${{ask.dist.toFixed(2)}}%</div>
-                        <div class="col size">${{ask.size.toFixed(S_DEC)}}</div>
+                // Asks (Reverse Iteration for visuals)
+                for (let i = 0; i < book.asks.length; i++) {{
+                    const ask = book.asks[i];
+                    html += `<div class="row">
+                        <div class="col lvl-idx">${{ask.level_idx}}</div>
+                        <div class="col right ask-price">${{ask.price.toFixed(P_DEC)}}</div>
+                        <div class="col right dist">${{ask.dist.toFixed(2)}}%</div>
+                        <div class="col right">${{ask.size.toFixed(S_DEC)}}</div>
                     </div>`;
                 }}
 
@@ -671,49 +892,67 @@ impl Strategy for GridStrategy {
 
                 // Bids
                 for (const bid of book.bids) {{
-                    html += `<div class="row bid">
-                        <div class="col lvl">${{bid.level_idx}}</div>
-                        <div class="col price">${{bid.price.toFixed(P_DEC)}}</div>
-                        <div class="col dist">${{bid.dist.toFixed(2)}}%</div>
-                        <div class="col size">${{bid.size.toFixed(S_DEC)}}</div>
+                    html += `<div class="row">
+                        <div class="col lvl-idx">${{bid.level_idx}}</div>
+                        <div class="col right bid-price">${{bid.price.toFixed(P_DEC)}}</div>
+                        <div class="col right dist">${{bid.dist.toFixed(2)}}%</div>
+                        <div class="col right">${{bid.size.toFixed(S_DEC)}}</div>
                     </div>`;
                 }}
-
-                const container = document.getElementById('clobContent');
                 
-                // Check if user is scrolling (naive check: if not at top/centered, maybe don't disrupt?)
-                // Actually replacing innerHTML keeps scroll position mostly intact if height doesn't drastically change.
-                // But auto-centering logic should only run once.
-                
+                const container = document.getElementById('bookContainer');
                 container.innerHTML = html;
 
-                if (firstLoad) {{
-                    const spreadEl = document.querySelector('.spread-row');
-                    if (spreadEl) {{
-                        const topPos = spreadEl.offsetTop;
-                        const containerHeight = container.clientHeight;
-                        const spreadHeight = spreadEl.clientHeight;
-                        container.scrollTop = topPos - (containerHeight / 2) + (spreadHeight / 2);
-                    }}
-                    firstLoad = false;
+                // Auto-center on first load (approximate)
+                if (firstLoad && book.asks.length > 0) {{
+                     // Calculate height of ask entries to scroll to middle
+                     // Each row is approx 24px height + gap
+                     const rowHeight = 24; 
+                     const askHeight = book.asks.length * rowHeight;
+                     // Center in viewport (height 700 - header ~150) / 2
+                     const viewHeight = container.parentElement.clientHeight;
+                     const scrollPos = askHeight - (viewHeight / 2);
+                     
+                     container.parentElement.scrollTop = scrollPos > 0 ? scrollPos : 0;
+                     firstLoad = false;
                 }}
+                
+                // --- Render Trades ---
+                const trades = data.custom.recent_trades || [];
+                let tradesHtml = '';
+                
+                if (trades.length === 0) {{
+                    tradesHtml = '<tr><td colspan="3" style="text-align:center; padding: 20px; color: var(--text-muted)">No trades yet</td></tr>';
+                }} else {{
+                    for (const trade of trades) {{
+                        const sideClass = trade.side === 'Buy' ? 'trade-buy' : 'trade-sell';
+                        const timeStr = new Date(trade.time * 1000).toLocaleTimeString();
+                        tradesHtml += `<tr>
+                            <td class="${{sideClass}}">${{trade.price.toFixed(P_DEC)}}</td>
+                            <td>${{trade.size.toFixed(S_DEC)}}</td>
+                            <td style="color: var(--text-muted)">${{timeStr}}</td>
+                        </tr>`;
+                    }}
+                }}
+                document.getElementById('tradesBody').innerHTML = tradesHtml;
+
             }} catch (e) {{
-                console.error("Failed to update dashboard", e);
+                console.error("Fetch error:", e);
             }}
         }}
 
-        // Initial Load
-        updateDashboard();
-        // Poll every 1s
+        // Start Loop
         setInterval(updateDashboard, 1000);
+        updateDashboard();
     </script>
 </body>
-</html>"##,
+</html>
+        "##,
             name = status.name,
             asset = status.asset,
             levels = self.grid_levels,
             range = format!("{:.2} - {:.2}", self.lower_price, self.upper_price),
-            pnl_color = if status.net_profit() >= 0.0 { "var(--green)" } else { "var(--red)" },
+            pnl_color = if status.net_profit() >= 0.0 { "var(--buy-color)" } else { "var(--sell-color)" },
             pnl = status.net_profit(),
             pos = status.position,
             p_dec = p_dec,
