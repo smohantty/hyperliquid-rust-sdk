@@ -5,15 +5,14 @@ wallet_private_key = "0000000000000000000000000000000000000000000000000000000000
 
 [strategy]
 type = "grid"
-asset = "BTC"
+asset = "HYPE/USDC"
 
 [strategy.params]
-grid_levels = 100
+grid_levels = 200
 grid_mode = "arithmetic"
-lower_price = 85000.0
-upper_price = 95500.0
+lower_price = 26.0
+upper_price = 30.0
 total_investment = 10000.0
-# trigger_price = 29.34 # Commented out to start immediately
 [log]
 level = "info"
 

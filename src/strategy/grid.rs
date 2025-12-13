@@ -470,6 +470,10 @@ impl Strategy for GridStrategy {
                 "range": format!("{:.2} - {:.2}", self.lower_price, self.upper_price),
                 "active_orders": self.active_orders.len(),
                 "trades": self.trade_count,
+                "asset_precision": {
+                    "price_decimals": self.precision.price_decimals,
+                    "size_decimals": self.precision.sz_decimals
+                },
                 "book": {
                     "asks": asks,
                     "bids": bids
@@ -599,14 +603,21 @@ impl Strategy for GridStrategy {
     </div>
     
     <script>
-        const P_DEC = {p_dec};
-        const S_DEC = {s_dec};
+        // Init with safe defaults, will be overridden by API
+        let P_DEC = {p_dec};
+        let S_DEC = {s_dec};
         let firstLoad = true;
 
         async function updateDashboard() {{
             try {{
                 const res = await fetch('/api/status');
                 const data = await res.json();
+                
+                // Update Precision from API if available
+                if (data.custom.asset_precision) {{
+                    P_DEC = data.custom.asset_precision.price_decimals;
+                    S_DEC = data.custom.asset_precision.size_decimals;
+                }}
                 
                 // Update Header Stats
                 const pnl = data.realized_pnl - data.total_fees;
