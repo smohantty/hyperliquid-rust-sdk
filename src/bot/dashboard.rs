@@ -429,7 +429,12 @@ pub fn render_dashboard(status: &StrategyStatus) -> String {
                             priceLineVisible: true,
                             priceLineColor: '#00c2ff',
                             priceLineWidth: 1,
-                            priceLineStyle: 2,
+                            priceLineStyle: 2, // Dashed
+                            priceFormat: {{
+                                type: 'price',
+                                precision: P_DEC,
+                                minMove: Math.pow(10, -P_DEC),
+                            }},
                         }});
                     }} catch (e) {{
                         console.error("Error adding series. Chart object:", chart);
