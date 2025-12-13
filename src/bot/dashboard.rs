@@ -543,8 +543,60 @@ pub fn render_dashboard(status: &StrategyStatus) -> String {
                         try {{
                             candleSeries.update(updatedCandle);
                         }} catch(e) {{
-                            console.error("Candle update error:", e);
+                            // Silently ignore update errors
                         }}
+                    }}
+                }}
+                
+                // Add trade markers to chart
+                if (loadedCandles && candleSeries && data.custom && data.custom.recent_trades) {{
+                    const trades = data.custom.recent_trades;
+                    
+                    // Aggregate trades by 15-minute candle timestamp
+                    const tradesByCandle = new Map();
+                    trades.forEach(trade => {{
+                        // Round trade time to 15-minute candle
+                        const candleTime = Math.floor(trade.time / 900) * 900; // 900 = 15 * 60
+                        
+                        if (!tradesByCandle.has(candleTime)) {{
+                            tradesByCandle.set(candleTime, {{ buys: 0, sells: 0 }});
+                        }}
+                        
+                        const counts = tradesByCandle.get(candleTime);
+                        if (trade.side === 'Buy') {{
+                            counts.buys++;
+                        }} else {{
+                            counts.sells++;
+                        }}
+                    }});
+                    
+                    // Create markers for candles with trades
+                    const markers = [];
+                    tradesByCandle.forEach((counts, time) => {{
+                        if (counts.buys > 0) {{
+                            markers.push({{
+                                time: time,
+                                position: 'aboveBar',
+                                color: '#00c2a2',
+                                shape: 'arrowUp',
+                                text: `B:${{counts.buys}}`,
+                            }});
+                        }}
+                        if (counts.sells > 0) {{
+                            markers.push({{
+                                time: time,
+                                position: 'belowBar',
+                                color: '#ff3b69',
+                                shape: 'arrowDown',
+                                text: `S:${{counts.sells}}`,
+                            }});
+                        }}
+                    }});
+                    
+                    try {{
+                        candleSeries.setMarkers(markers);
+                    }} catch(e) {{
+                        console.error("Error setting markers:", e);
                     }}
                 }}
                 
