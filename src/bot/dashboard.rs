@@ -424,6 +424,11 @@ pub fn render_dashboard(status: &StrategyStatus) -> String {
                             borderVisible: false,
                             wickUpColor: '#00c2a2',
                             wickDownColor: '#ff3b69',
+                            lastValueVisible: true,
+                            priceLineVisible: true,
+                            priceLineColor: '#00c2ff',
+                            priceLineWidth: 2,
+                            priceLineStyle: 0,
                         }});
                     }} catch (e) {{
                         console.error("Error adding series. Chart object:", chart);
