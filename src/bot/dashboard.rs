@@ -576,6 +576,28 @@ pub fn render_dashboard(status: &StrategyStatus) -> String {
                             window.gridPriceLines.push(line);
                         }});
                     }}
+                    
+                    // Draw current price line (cyan, like in the reference image)
+                    if (book.asks && book.asks.length > 0 && book.bids && book.bids.length > 0) {{
+                        const bestAsk = book.asks[book.asks.length - 1].price;
+                        const bestBid = book.bids[0].price;
+                        const midPrice = (bestAsk + bestBid) / 2;
+                        
+                        // Remove old current price line if exists
+                        if (window.currentPriceLine) {{
+                            try {{ candleSeries.removePriceLine(window.currentPriceLine); }} catch(e) {{}}
+                        }}
+                        
+                        // Create new current price line
+                        window.currentPriceLine = candleSeries.createPriceLine({{
+                            price: midPrice,
+                            color: '#00c2ff',
+                            lineWidth: 1,
+                            lineStyle: 0, // Solid
+                            axisLabelVisible: true,
+                            title: 'Current',
+                        }});
+                    }}
                 }}
 
                 // --- 1. Update Header / Bot Stats ---
