@@ -576,28 +576,22 @@ pub fn render_dashboard(status: &StrategyStatus) -> String {
                             window.gridPriceLines.push(line);
                         }});
                     }}
+                }}
+                
+                // --- Draw Current Price Line (Independent from grid lines) ---
+                if (candleSeries && data.custom && data.custom.book) {{
+                    const book = data.custom.book;
                     
-                    // Draw current price line
-                    console.log("Checking for current price line creation...", {{
-                        hasBook: !!book,
-                        hasAsks: book?.asks?.length,
-                        hasBids: book?.bids?.length
-                    }});
-                    
-                    if (book && book.asks && book.asks.length > 0 && book.bids && book.bids.length > 0) {{
+                    if (book.asks && book.asks.length > 0 && book.bids && book.bids.length > 0) {{
                         const bestAsk = book.asks[book.asks.length - 1].price;
                         const bestBid = book.bids[0].price;
                         const midPrice = (bestAsk + bestBid) / 2;
-                        
-                        console.log("Mid price calculated:", midPrice, "from", bestBid, "to", bestAsk);
                         
                         // Remove old current price line if exists
                         if (window.currentPriceLine) {{
                             try {{ 
                                 candleSeries.removePriceLine(window.currentPriceLine); 
-                            }} catch(e) {{
-                                console.error("Error removing old price line:", e);
-                            }}
+                            }} catch(e) {{}}
                         }}
                         
                         // Create new current price line
@@ -606,16 +600,13 @@ pub fn render_dashboard(status: &StrategyStatus) -> String {
                                 price: midPrice,
                                 color: '#ffd700',
                                 lineWidth: 2,
-                                lineStyle: 0, // Solid
+                                lineStyle: 0,
                                 axisLabelVisible: true,
-                                title: 'Current',
+                                title: 'Px',
                             }});
-                            console.log("✓ Current price line created at", midPrice);
                         }} catch(e) {{
-                            console.error("✗ Error creating current price line:", e);
+                            console.error("Error creating current price line:", e);
                         }}
-                    }} else {{
-                        console.warn("Cannot create current price line - missing order book data");
                     }}
                 }}
 
