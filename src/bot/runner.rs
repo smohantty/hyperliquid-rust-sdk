@@ -4,7 +4,7 @@ use tokio::sync::RwLock;
 use log::{info, warn};
 use alloy::signers::local::PrivateKeySigner;
 
-use crate::config::Settings;
+use crate::config::{self, Settings};
 use crate::strategy::StrategyRegistry;
 use crate::bot::Bot;
 use crate::market::{HyperliquidMarket, HyperliquidMarketInput, PaperTradingMarket, PaperTradingMarketInput};

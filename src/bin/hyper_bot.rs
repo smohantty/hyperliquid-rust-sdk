@@ -1,5 +1,5 @@
 use hyperliquid_rust_sdk::{
-    runner::BotRunner,
+    bot::BotRunner,
     strategy::{grid::GridStrategyFactory, NoOpStrategy, Strategy, StrategyFactory, StrategyRegistry},
 };
 use std::collections::HashMap;

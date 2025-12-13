@@ -1,4 +1,5 @@
-use config::{Config, ConfigError, File};
+use config::{Config, File};
+pub use config::ConfigError;
 use serde::Deserialize;
 use serde_json::Value; // Add this import
 
