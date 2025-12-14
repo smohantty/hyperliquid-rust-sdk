@@ -423,7 +423,7 @@ pub fn render_dashboard(status: &StrategyStatus) -> String {
                 // Update Precision
                 if (data.custom.asset_precision) {{
                     P_DEC = data.custom.asset_precision.price_decimals;
-                    S_DEC = data.custom.asset_precision.size_decimals;
+                    S_DEC = data.custom.asset_precision.sz_decimals;
                 }}
                 
                 // Initialize Chart if needed
