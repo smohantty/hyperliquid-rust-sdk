@@ -2,32 +2,44 @@ use crate::strategy::StrategyStatus;
 
 pub fn render_dashboard(status: &StrategyStatus) -> String {
     // defaults
-    let p_dec = status.custom.get("asset_precision")
+    let p_dec = status
+        .custom
+        .get("asset_precision")
         .and_then(|p| p.get("price_decimals"))
         .and_then(|v| v.as_u64())
         .unwrap_or(2);
-        
-    let s_dec = status.custom.get("asset_precision")
+
+    let s_dec = status
+        .custom
+        .get("asset_precision")
         .and_then(|p| p.get("sz_decimals"))
         .and_then(|v| v.as_u64())
         .unwrap_or(4);
 
-    let grid_levels = status.custom.get("levels").and_then(|v| v.as_u64()).unwrap_or(0);
-    
+    let grid_levels = status
+        .custom
+        .get("levels")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+
     // Attempt to get range
     let range = if let (Some(l), Some(u)) = (
         status.custom.get("lower_price").and_then(|v| v.as_f64()),
-        status.custom.get("upper_price").and_then(|v| v.as_f64())
+        status.custom.get("upper_price").and_then(|v| v.as_f64()),
     ) {
         format!("{:.2} - {:.2}", l, u)
     } else {
         "N/A".to_string()
     };
 
-    let pnl_color = if status.net_profit() >= 0.0 { "var(--buy)" } else { "var(--sell)" };
+    let pnl_color = if status.net_profit() >= 0.0 {
+        "var(--buy)"
+    } else {
+        "var(--sell)"
+    };
 
     format!(
-            r##"<!DOCTYPE html>
+        r##"<!DOCTYPE html>
 <html>
 <head>
     <title>{name} - Grid Terminal</title>
@@ -699,31 +711,33 @@ pub fn render_dashboard(status: &StrategyStatus) -> String {
                         </div>`;
                     }}
 
-                    // Spread
+                    // Spread & Current Price
+                    let currentPrice = data.custom.current_price || 0;
+                    let spreadHtml = '<div class="col right" style="color: var(--text-secondary);">--</div>'; // Default to --
+
+                    // Try to calc spread if we have both sides
                     if (book.asks.length > 0 && book.bids.length > 0) {{
                         const bestAsk = book.asks[book.asks.length - 1].price;
                         const bestBid = book.bids[0].price;
                         const spread = bestAsk - bestBid;
                         const spreadPct = (spread / bestAsk) * 100;
+                        spreadHtml = `<div class="col right" style="color: var(--text-secondary);">${{spreadPct.toFixed(2)}}%</div>`;
                         
-                        let midPrice = (bestAsk + bestBid) / 2;
-                        if (data.custom.current_price && data.custom.current_price > 0) {{
-                            midPrice = data.custom.current_price;
+                        // Fallback price if not provided (though it should be)
+                        if (currentPrice <= 0) {{
+                            currentPrice = (bestAsk + bestBid) / 2;
                         }}
-                        
-                        
-                        html += `<div class="spread-row">
+                    }}
+
+                    if (currentPrice > 0) {{
+                        const spreadRow = `<div class="spread-row">
                             <div class="col lvl-idx"></div>
-                            <div class="col right" style="color: #00c2ff; font-weight: bold;">${{midPrice.toFixed(P_DEC)}}</div>
-                            <div class="col right" style="color: var(--text-secondary);">${{spreadPct.toFixed(2)}}%</div>
+                            <div class="col right" style="color: #00c2ff; font-weight: bold;">${{currentPrice.toFixed(P_DEC)}}</div>
+                            ${{spreadHtml}}
                             <div class="col right"></div>
                         </div>`;
                         
-                        // Update Chart Realtime Price Line (Optional)
-                        if(candleSeries && !loadedCandles) {{ // Only if candles not loaded or just to show curent price
-                           // LWC doesn't autoupdate candles, but we can update the last candle
-                        }}
-                        
+                        html += spreadRow;
                     }} else {{
                         html += `<div class="spread-row">No Active Spread</div>`;
                     }}
@@ -802,14 +816,14 @@ pub fn render_dashboard(status: &StrategyStatus) -> String {
 </body>
 </html>
         "##,
-            name = status.name,
-            asset = status.asset,
-            levels = grid_levels,
-            range = range,
-            pnl_color = pnl_color,
-            pnl = status.net_profit(),
-            pos = status.position,
-            p_dec = p_dec,
-            s_dec = s_dec
+        name = status.name,
+        asset = status.asset,
+        levels = grid_levels,
+        range = range,
+        pnl_color = pnl_color,
+        pnl = status.net_profit(),
+        pos = status.position,
+        p_dec = p_dec,
+        s_dec = s_dec
     )
 }
