@@ -350,11 +350,11 @@ pub fn render_dashboard(status: &StrategyStatus) -> String {
     <!-- 3. Bottom Panel (Roundtrips/History) -->
     <div class="bottom-panel">
         <div class="panel-header">
-            <div class="panel-tab active">Execution History</div>
-            <div class="panel-tab">Roundtrip PnL (Alpha)</div>
+            <div class="panel-tab active" onclick="switchBottomTab('history')">Execution History</div>
+            <div class="panel-tab" onclick="switchBottomTab('roundtrip')">Roundtrip PnL (Alpha)</div>
         </div>
         <div style="flex: 1; overflow: auto; padding-bottom: 20px;">
-             <table class="trades-table">
+             <table class="trades-table" id="historyTable">
                 <thead>
                     <tr>
                         <th>Time</th>
@@ -366,6 +366,23 @@ pub fn render_dashboard(status: &StrategyStatus) -> String {
                 </thead>
                 <tbody id="mainTradesBody">
                     <!-- Full history injected here -->
+                </tbody>
+            </table>
+            
+            <table class="trades-table" id="roundtripTable" style="display: none;">
+                <thead>
+                    <tr>
+                        <th>Exit Time</th>
+                        <th>Type</th>
+                        <th>Entry Px</th>
+                        <th>Exit Px</th>
+                        <th>Size</th>
+                        <th>PnL</th>
+                        <th>Dur</th>
+                    </tr>
+                </thead>
+                <tbody id="roundtripBody">
+                    <!-- Roundtrips injected here -->
                 </tbody>
             </table>
         </div>
@@ -650,6 +667,7 @@ pub fn render_dashboard(status: &StrategyStatus) -> String {
                     // Draw Buy levels (green)
                     if (book.bids && Array.isArray(book.bids)) {{
                         book.bids.forEach(bid => {{
+                            if (!bid.has_order) return;
                             const line = candleSeries.createPriceLine({{
                                 price: bid.price,
                                 color: '#00c2a2',
@@ -665,6 +683,7 @@ pub fn render_dashboard(status: &StrategyStatus) -> String {
                     // Draw Sell levels (red)
                     if (book.asks && Array.isArray(book.asks)) {{
                         book.asks.forEach(ask => {{
+                            if (!ask.has_order) return;
                             const line = candleSeries.createPriceLine({{
                                 price: ask.price,
                                 color: '#ff3b69',
@@ -805,8 +824,55 @@ pub fn render_dashboard(status: &StrategyStatus) -> String {
                 }}
                 document.getElementById('mainTradesBody').innerHTML = mainHtml;
 
+                
+                // --- 4. Render Roundtrips (Bottom Panel Tab) ---
+                const roundtrips = data.custom.roundtrips || [];
+                const rtBody = document.getElementById('roundtripBody'); // Need to add this ID to HTML first
+                
+                if (rtBody) {{
+                    let rtHtml = '';
+                    if (roundtrips.length === 0) {{
+                        rtHtml = '<tr><td colspan="7" style="text-align:center; padding: 20px;">No roundtrips yet</td></tr>';
+                    }} else {{
+                        for (const rt of roundtrips) {{
+                            const pnlClass = rt.pnl >= 0 ? 'trade-buy' : 'trade-sell';
+                            const sideClass = rt.side === 'Long' ? 'trade-buy' : 'trade-sell';
+                            
+                            // Times
+                            const entryTime = new Date(rt.entry_time * 1000).toLocaleTimeString();
+                            const exitTime = new Date(rt.exit_time * 1000).toLocaleTimeString();
+                            const duration = rt.exit_time - rt.entry_time;
+                            
+                            rtHtml += `<tr>
+                                <td>${{exitTime}}</td>
+                                <td class="${{sideClass}}">${{rt.side.toUpperCase()}}</td>
+                                <td>${{rt.entry_price.toFixed(P_DEC)}}</td>
+                                <td>${{rt.exit_price.toFixed(P_DEC)}}</td>
+                                <td>${{rt.size.toFixed(S_DEC)}}</td>
+                                <td class="${{pnlClass}}">${{rt.pnl.toFixed(2)}}</td>
+                                <td style="color: var(--text-secondary)">${{duration}}s</td>
+                            </tr>`;
+                        }}
+                    }}
+                    rtBody.innerHTML = rtHtml;
+                }}
+
             }} catch (e) {{
                 console.error("Fetch error:", e);
+            }}
+        }}
+        
+        // Tab Switching for Bottom Panel
+        function switchBottomTab(tabName) {{
+            document.querySelectorAll('.bottom-panel .panel-tab').forEach(t => t.classList.remove('active'));
+            if (tabName === 'history') {{
+                document.querySelector('.bottom-panel .panel-tab:nth-child(1)').classList.add('active');
+                document.getElementById('historyTable').style.display = 'table';
+                document.getElementById('roundtripTable').style.display = 'none';
+            }} else {{
+                document.querySelector('.bottom-panel .panel-tab:nth-child(2)').classList.add('active');
+                document.getElementById('historyTable').style.display = 'none';
+                document.getElementById('roundtripTable').style.display = 'table';
             }}
         }}
 
@@ -814,7 +880,6 @@ pub fn render_dashboard(status: &StrategyStatus) -> String {
         updateDashboard();
     </script>
 </body>
-</html>
         "##,
         name = status.name,
         asset = status.asset,
