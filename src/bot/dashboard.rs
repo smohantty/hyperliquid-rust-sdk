@@ -180,16 +180,20 @@ pub fn render_dashboard(status: &StrategyStatus) -> String {
         /* Reuse CLOB styles with tweaked colors */
         .clob-header {{
             display: grid;
-            grid-template-columns: 40px 1fr 1fr 1fr 1fr;
+            grid-template-columns: 25px 1fr 1fr 1fr 1fr;
             padding: 8px 12px;
             font-size: 10px;
             color: var(--text-secondary);
             font-family: 'JetBrains Mono', monospace;
             border-bottom: 1px solid var(--border);
+            position: sticky;
+            top: 0;
+            z-index: 10;
+            background: var(--bg-panel);
         }}
         .row {{
             display: grid;
-            grid-template-columns: 40px 1fr 1fr 1fr 1fr;
+            grid-template-columns: 25px 1fr 1fr 1fr 1fr;
             padding: 3px 12px;
             font-size: 11px;
             font-family: 'JetBrains Mono', monospace;
@@ -204,7 +208,7 @@ pub fn render_dashboard(status: &StrategyStatus) -> String {
 
         .spread-row {{
             display: grid;
-            grid-template-columns: 40px 1fr 1fr 1fr 1fr;
+            grid-template-columns: 25px 1fr 1fr 1fr 1fr;
             gap: 8px;
             padding: 6px;
             font-size: 11px;
@@ -324,14 +328,14 @@ pub fn render_dashboard(status: &StrategyStatus) -> String {
 
             <!-- CLOB Tab -->
             <div id="tab-book" class="tab-content active">
-                 <div class="clob-header">
-                    <div class="col">Lvl</div>
-                    <div class="col right">Price</div>
-                    <div class="col right">Dist%</div>
-                    <div class="col right">Size ({base_asset})</div>
-                    <div class="col right">Size ({quote_asset})</div>
-                </div>
                  <div class="book-scroll-area">
+                    <div class="clob-header">
+                        <div class="col">Lvl</div>
+                        <div class="col">Price</div>
+                        <div class="col">Dist%</div>
+                        <div class="col">Size ({base_asset})</div>
+                        <div class="col">Size ({quote_asset})</div>
+                    </div>
                     <div id="bookContainer" class="book-container">
                          <div style="padding: 20px; text-align: center; color: var(--text-secondary)">Loading...</div>
                     </div>
@@ -728,16 +732,16 @@ pub fn render_dashboard(status: &StrategyStatus) -> String {
                         const opacity = ask.has_order ? '1' : '0.3';
                         html += `<div class="row" style="opacity: ${{opacity}}">
                             <div class="col lvl-idx">${{ask.level_idx}}</div>
-                            <div class="col right ask-price">${{ask.price.toFixed(P_DEC)}}</div>
-                            <div class="col right dist">${{ask.dist.toFixed(2)}}%</div>
-                            <div class="col right">${{sizeDisplay}}</div>
-                            <div class="col right">${{valDisplay}}</div>
+                            <div class="col ask-price">${{ask.price.toFixed(P_DEC)}}</div>
+                            <div class="col dist">${{ask.dist.toFixed(2)}}%</div>
+                            <div class="col">${{sizeDisplay}}</div>
+                            <div class="col">${{valDisplay}}</div>
                         </div>`;
                     }}
 
                     // Spread & Current Price
                     let currentPrice = data.custom.current_price || 0;
-                    let spreadHtml = '<div class="col right" style="color: var(--text-secondary);">--</div>'; // Default to --
+                    let spreadHtml = '<div class="col" style="color: var(--text-secondary);">--</div>'; // Default to --
 
                     // Try to calc spread if we have both sides
                     if (book.asks.length > 0 && book.bids.length > 0) {{
@@ -745,7 +749,7 @@ pub fn render_dashboard(status: &StrategyStatus) -> String {
                         const bestBid = book.bids[0].price;
                         const spread = bestAsk - bestBid;
                         const spreadPct = (spread / bestAsk) * 100;
-                        spreadHtml = `<div class="col right" style="color: var(--text-secondary);">${{spreadPct.toFixed(2)}}%</div>`;
+                        spreadHtml = `<div class="col" style="color: var(--text-secondary);">${{spreadPct.toFixed(2)}}%</div>`;
                         
                         // Fallback price if not provided (though it should be)
                         if (currentPrice <= 0) {{
@@ -756,10 +760,10 @@ pub fn render_dashboard(status: &StrategyStatus) -> String {
                     if (currentPrice > 0) {{
                         const spreadRow = `<div class="spread-row">
                             <div class="col lvl-idx"></div>
-                            <div class="col right" style="color: #00c2ff; font-weight: bold;">${{currentPrice.toFixed(P_DEC)}}</div>
+                            <div class="col" style="color: #00c2ff; font-weight: bold;">${{currentPrice.toFixed(P_DEC)}}</div>
                             ${{spreadHtml}}
-                            <div class="col right"></div>
-                            <div class="col right"></div>
+                            <div class="col"></div>
+                            <div class="col"></div>
                         </div>`;
                         
                         html += spreadRow;
@@ -774,10 +778,10 @@ pub fn render_dashboard(status: &StrategyStatus) -> String {
                         const opacity = bid.has_order ? '1' : '0.3';
                         html += `<div class="row" style="opacity: ${{opacity}}">
                             <div class="col lvl-idx">${{bid.level_idx}}</div>
-                            <div class="col right bid-price">${{bid.price.toFixed(P_DEC)}}</div>
-                            <div class="col right dist">${{bid.dist.toFixed(2)}}%</div>
-                            <div class="col right">${{sizeDisplay}}</div>
-                            <div class="col right">${{valDisplay}}</div>
+                            <div class="col bid-price">${{bid.price.toFixed(P_DEC)}}</div>
+                            <div class="col dist">${{bid.dist.toFixed(2)}}%</div>
+                            <div class="col">${{sizeDisplay}}</div>
+                            <div class="col">${{valDisplay}}</div>
                         </div>`;
                     }}
                     
