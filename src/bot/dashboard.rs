@@ -37,6 +37,7 @@ pub fn render_dashboard(status: &StrategyStatus) -> String {
     } else {
         "var(--sell)"
     };
+    let base_asset = status.asset.split('/').next().unwrap_or(&status.asset);
 
     format!(
         r##"<!DOCTYPE html>
@@ -326,7 +327,7 @@ pub fn render_dashboard(status: &StrategyStatus) -> String {
                     <div class="col">Lvl</div>
                     <div class="col right">Price</div>
                     <div class="col right">Dist%</div>
-                    <div class="col right">Size</div>
+                    <div class="col right">Size ({base_asset})</div>
                 </div>
                  <div class="book-scroll-area">
                     <div id="bookContainer" class="book-container">
