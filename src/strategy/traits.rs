@@ -336,7 +336,7 @@ mod tests {
             "upper_price": 55000.0
         });
 
-        let status = StrategyStatus::new("GridStrategy", "BTC").with_custom(custom);
+        let status = StrategyStatus::new("SpotGridStrategy", "BTC").with_custom(custom);
 
         assert!(status.custom.get("grid_levels").is_some());
         assert_eq!(status.custom["grid_levels"], 10);

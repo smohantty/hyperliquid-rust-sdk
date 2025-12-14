@@ -43,7 +43,7 @@ pub struct RoundTrip {
     pub exit_lvl: usize,
 }
 
-pub struct GridStrategy {
+pub struct SpotGridStrategy {
     asset: String,
     lower_price: f64,
     upper_price: f64,
@@ -80,7 +80,7 @@ pub struct GridStrategy {
     initial_placement_done: bool,
 }
 
-impl GridStrategy {
+impl SpotGridStrategy {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         asset: String,
@@ -357,7 +357,7 @@ impl GridStrategy {
     }
 }
 
-impl Strategy for GridStrategy {
+impl Strategy for SpotGridStrategy {
     fn on_price_update(&mut self, asset: &str, price: f64) -> Vec<OrderRequest> {
         if asset != self.asset {
             return vec![];
@@ -658,9 +658,9 @@ impl Strategy for GridStrategy {
     }
 }
 
-pub struct GridStrategyFactory;
+pub struct SpotGridStrategyFactory;
 
-impl StrategyFactory for GridStrategyFactory {
+impl StrategyFactory for SpotGridStrategyFactory {
     fn create(
         &self,
         asset: &str,
@@ -736,7 +736,7 @@ impl StrategyFactory for GridStrategyFactory {
             error!("Must specify either order_size or total_investment");
         }
 
-        Box::new(GridStrategy::new(
+        Box::new(SpotGridStrategy::new(
             asset.to_string(),
             lower_price,
             upper_price,
@@ -755,8 +755,8 @@ mod tests {
     use super::*;
     use crate::market::{AssetPrecision, OrderFill, OrderSide};
 
-    fn create_test_strategy() -> GridStrategy {
-        GridStrategy::new(
+    fn create_test_strategy() -> SpotGridStrategy {
+        SpotGridStrategy::new(
             "SOL-USDC".to_string(),
             100.0,
             120.0,

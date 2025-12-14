@@ -64,10 +64,9 @@
 //! }
 //! ```
 
-mod traits;
 pub mod registry;
-pub mod grid;
+pub mod spot_grid;
+mod traits;
 
-pub use traits::{NoOpStrategy, Strategy, StrategyStatus};
 pub use registry::{StrategyFactory, StrategyRegistry};
-
+pub use traits::{NoOpStrategy, Strategy, StrategyStatus};

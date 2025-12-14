@@ -4,14 +4,14 @@ mode = "paper"
 wallet_private_key = "0000000000000000000000000000000000000000000000000000000000000001"
 
 [strategy]
-type = "grid"
+type = "spot_grid"
 asset = "HYPE/USDC"
 
 [strategy.params]
-grid_levels = 200
+grid_levels = 80
 grid_mode = "arithmetic"
-lower_price = 26.0
-upper_price = 30.0
+lower_price = 29
+upper_price = 30
 total_investment = 10000.0
 [log]
 level = "info"
