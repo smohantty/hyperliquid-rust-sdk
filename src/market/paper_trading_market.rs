@@ -221,7 +221,7 @@ impl<L: MarketListener> PaperTradingMarket<L> {
     /// * `listener` - Shared listener wrapped in Arc<RwLock<L>>
     pub async fn new(input: PaperTradingMarketInput, listener: Arc<RwLock<L>>) -> Result<Self, crate::Error> {
         // Paper trading always uses Mainnet for real price data
-        let info_client = InfoClient::new(None, Some(BaseUrl::Mainnet)).await?;
+        let info_client = InfoClient::with_reconnect(None, Some(BaseUrl::Mainnet)).await?;
 
         // Resolve asset to exchange key (e.g., "HYPE/USDC" -> "@107")
         let asset_key = Self::resolve_asset_key(&info_client, &input.asset).await?;

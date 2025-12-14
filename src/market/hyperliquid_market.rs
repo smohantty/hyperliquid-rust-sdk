@@ -128,7 +128,7 @@ impl<L: MarketListener> HyperliquidMarket<L> {
         let user_address = input.wallet.address();
         let base_url = input.base_url.unwrap_or(BaseUrl::Mainnet);
 
-        let info_client = InfoClient::new(None, Some(base_url)).await?;
+        let info_client = InfoClient::with_reconnect(None, Some(base_url)).await?;
         let exchange_client =
             ExchangeClient::new(None, input.wallet, Some(base_url), None, None).await?;
 
