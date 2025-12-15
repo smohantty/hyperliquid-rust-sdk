@@ -516,10 +516,9 @@ impl Strategy for SpotGridStrategy {
             0.0
         };
         custom.insert("qty_order".to_string(), json!(qty_order));
-        custom.insert(
-            "total_roundtrips".to_string(),
-            json!(self.completed_roundtrips.len()),
-        );
+
+        let total_roundtrips: u32 = self.zones.iter().map(|z| z.roundtrip_count).sum();
+        custom.insert("total_roundtrips".to_string(), json!(total_roundtrips));
 
         custom.insert(
             "book".to_string(),
