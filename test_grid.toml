@@ -8,10 +8,10 @@ type = "spot_grid"
 asset = "HYPE/USDC"
 
 [strategy.params]
-grid_levels = 80
+grid_levels = 200
 grid_mode = "arithmetic"
-lower_price = 29
-upper_price = 30
+lower_price = 27
+upper_price = 33
 total_investment = 10000.0
 [log]
 level = "info"

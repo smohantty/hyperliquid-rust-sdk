@@ -37,8 +37,18 @@ pub fn render_dashboard(status: &StrategyStatus) -> String {
     } else {
         "var(--sell)"
     };
+
+    // Add prefix _ to suppress unused warning as per user request context
+    let _pnl_color = pnl_color;
+
     let base_asset = status.asset.split('/').next().unwrap_or(&status.asset);
     let quote_asset = status.asset.split('/').nth(1).unwrap_or("USDC");
+
+    let grid_type = status
+        .custom
+        .get("grid_type")
+        .and_then(|v| v.as_str())
+        .unwrap_or("Unknown");
 
     format!(
         r##"<!DOCTYPE html>
@@ -72,7 +82,7 @@ pub fn render_dashboard(status: &StrategyStatus) -> String {
             margin: 0;
             height: 100vh;
             display: grid;
-            grid-template-rows: 50px 1fr 500px; /* Header, Main, Bottom */
+            grid-template-rows: 1fr 500px; /* Main, Bottom */
             overflow: hidden;
         }}
 
@@ -131,22 +141,52 @@ pub fn render_dashboard(status: &StrategyStatus) -> String {
             position: relative;
         }}
 
-        /* Bot Info Widget (Floating or embedded in Chart area) */
+        /* Updated Header Stats Grid */
         .bot-stats {{
             display: grid;
-            grid-template-columns: repeat(4, 1fr);
-            gap: 10px;
-            margin-bottom: 20px;
-        }}
-        
-        .card {{
+            grid-template-columns: 1fr 1fr 1fr;
+            grid-template-rows: auto auto auto auto;
+            gap: 15px 20px;
+            margin-bottom: 25px;
             background: var(--bg-panel);
             border: 1px solid var(--border);
-            padding: 12px;
-            border-radius: 6px;
+            border-radius: 8px;
+            padding: 20px;
         }}
-        .card-title {{ font-size: 11px; color: var(--text-secondary); margin-bottom: 4px; }}
-        .card-value {{ font-size: 16px; font-weight: 600; font-family: 'JetBrains Mono', monospace; }}
+        
+        /* Specific layout for the 4 rows */
+        .stat-group {{
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }}
+        
+        .stat-label {{
+            font-size: 11px;
+            color: var(--text-secondary);
+            font-weight: 500;
+        }}
+        
+        .stat-value {{
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--text-primary);
+        }}
+        
+        .stat-sub {{
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 11px;
+            margin-top: 2px;
+        }}
+
+        /* Value Colors */
+        .val-green {{ color: var(--buy); }}
+        .val-red {{ color: var(--sell); }}
+        
+        /* Row 1 Prominent */
+        .row-large .stat-value {{ font-size: 20px; }}
+        .row-large .stat-sub {{ font-size: 13px; }}
 
         /* --- Side Panel (CLOB) --- */
         .side-panel {{
@@ -270,48 +310,73 @@ pub fn render_dashboard(status: &StrategyStatus) -> String {
     </style>
 </head>
 <body>
-    <!-- 1. Header -->
-    <header class="app-header">
-        <div class="brand">
-            <span>HELIX</span> // Grid
-        </div>
-        <div class="market-stat">
-            <div class="stat-item">
-                <span class="stat-label">ASSET</span>
-                <span class="stat-val">{asset}</span>
-            </div>
-            <div class="stat-item">
-                <span class="stat-label">RANGE</span>
-                <span class="stat-val">{range}</span>
-            </div>
-             <div class="stat-item">
-                <span class="stat-label">LEVELS</span>
-                <span class="stat-val">{levels}</span>
-            </div>
-        </div>
-    </header>
+
 
     <!-- 2. Main Area (Chart + Sidebar) -->
     <div class="main-container">
         <!-- Center Info -->
         <div class="chart-area">
-            <!-- Bot Stats Widgets -->
+            <!-- Detailed Bot Stats Header -->
             <div class="bot-stats">
-                <div class="card">
-                    <div class="card-title">Realized PnL</div>
-                    <div class="card-value" id="realizedPnl" style="color: {pnl_color}">${pnl:.2}</div>
+                <!-- Branding Header -->
+                <div style="grid-column: 1 / -1; display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; padding-bottom: 10px; border-bottom: 1px solid var(--border);">
+                    <div class="brand" style="font-size: 16px;"><span>HELIX</span> // {name} <span class="stat-label"> // {grid_type}</span></div>
+                    <div class="stat-value" style="color: var(--brand); font-size: 16px;">{asset}</div>
                 </div>
-                 <div class="card">
-                    <div class="card-title">Total Fees</div>
-                    <div class="card-value" id="totalFees">--</div>
+
+                <!-- Row 1: Total Profit & Invested Margin -->
+                <div class="stat-group row-large">
+                    <div class="stat-label">Total Profit ({quote_asset})</div>
+                    <div class="stat-value" id="disp_total_profit">--</div>
+                    <!-- <div class="stat-sub val-green" id="disp_total_profit_pct">--%</div> -->
                 </div>
-                <div class="card">
-                    <div class="card-title">Position</div>
-                    <div class="card-value" id="posVal">{pos:.4}</div>
+                 <div class="stat-group"></div> <!-- Spacer -->
+                <div class="stat-group row-large" style="text-align: right;">
+                    <div class="stat-label">Invested Margin ({quote_asset})</div>
+                    <div class="stat-value" id="disp_invested">--</div>
                 </div>
-                 <div class="card">
-                    <div class="card-title">Uptime</div>
-                    <div class="card-value" id="uptime">--</div>
+
+                <!-- Row 2: Matched | Unmatched | Funding -->
+                <div class="stat-group">
+                    <div class="stat-label">Matched Profit</div>
+                    <div class="stat-value val-green" id="disp_matched_pnl">--</div>
+                </div>
+                <div class="stat-group">
+                    <div class="stat-label">Unmatched PNL</div>
+                    <div class="stat-value" id="disp_unmatched_pnl">--</div>
+                    <!-- <div class="stat-sub" id="disp_unmatched_pct">0.00%</div> -->
+                </div>
+                <div class="stat-group" style="text-align: right;">
+                    <div class="stat-label">Funding Fee ({quote_asset})</div>
+                    <div class="stat-value" id="disp_funding">--</div>
+                </div>
+
+                <!-- Row 3: Range | Grids | Qty -->
+                <div class="stat-group">
+                    <div class="stat-label">Price Range ({base_asset})</div>
+                    <div class="stat-value" style="font-size: 13px;">{range}</div>
+                </div>
+                <div class="stat-group">
+                    <div class="stat-label">Number of Grids</div>
+                    <div class="stat-value">{levels}</div>
+                </div>
+                 <div class="stat-group" style="text-align: right;">
+                    <div class="stat-label">Qty/Order ({query_base_asset})</div>
+                    <div class="stat-value" id="disp_qty_order">--</div>
+                </div>
+
+                <!-- Row 4: Trades | Last Price | Liq -->
+                 <div class="stat-group">
+                    <div class="stat-label">Total Matched Trades</div>
+                    <div class="stat-value" id="disp_trade_count">--</div>
+                </div>
+                <div class="stat-group">
+                    <div class="stat-label">Last Price</div>
+                    <div class="stat-value" style="color: #fff;" id="disp_last_price">--</div>
+                </div>
+                 <div class="stat-group" style="text-align: right;">
+                    <div class="stat-label">Liq. Price</div>
+                    <div class="stat-value">--</div>
                 </div>
             </div>
 
@@ -323,7 +388,7 @@ pub fn render_dashboard(status: &StrategyStatus) -> String {
         <div class="side-panel">
             <div class="tabs">
                 <div class="tab active" onclick="switchTab('book')">Order Book</div>
-                <div class="tab" onclick="switchTab('recent')">Recent</div>
+                <div class="tab" onclick="switchTab('recent')">GridZone</div>
             </div>
 
             <!-- CLOB Tab -->
@@ -342,13 +407,17 @@ pub fn render_dashboard(status: &StrategyStatus) -> String {
                  </div>
             </div>
 
-            <!-- Recent Trades List (Sidebar version) -->
+            <!-- Grid Zone Stats -->
             <div id="tab-recent" class="tab-content">
-                 <div style="padding: 10px; color: var(--text-secondary); font-size: 11px; text-align: center;">Last 50 Executions</div>
+                 <div class="clob-header" style="grid-template-columns: 60px 1fr 100px; padding-right: 24px;">
+                    <div class="col" style="padding-left: 8px;">Lvl</div>
+                    <div class="col" style="text-align: center">RTs</div>
+                    <div class="col" style="text-align: right">PnL</div>
+                 </div>
                  <div class="book-scroll-area">
-                     <table class="trades-table" id="sidebarTrades">
-                         <!-- Sidebar simplified trades -->
-                     </table>
+                     <div id="zoneStatsContainer" class="book-container">
+                         <div style="padding: 20px; text-align: center; color: var(--text-secondary)">Loading...</div>
+                     </div>
                  </div>
             </div>
         </div>
@@ -705,14 +774,52 @@ pub fn render_dashboard(status: &StrategyStatus) -> String {
                 }}
 
 
-                // --- 1. Update Header / Bot Stats ---
-                const pnl = data.realized_pnl - data.total_fees;
-                const pnlEl = document.getElementById('realizedPnl');
-                pnlEl.innerText = '$' + pnl.toFixed(2);
-                pnlEl.style.color = pnl >= 0 ? 'var(--buy)' : 'var(--sell)';
+                // --- 1. Update Detail Header ---
                 
-                document.getElementById('totalFees').innerText = '$' + data.total_fees.toFixed(2);
-                document.getElementById('posVal').innerText = data.position.toFixed(S_DEC);
+                // DATA
+                const matchedPnl = data.realized_pnl;
+                const fees = data.total_fees;
+                const unmatchedPnl = (data.custom.unmatched_pnl || 0);
+                const totalProfit = matchedPnl + unmatchedPnl - fees;
+                const invested = data.custom.invested_value || 0;
+                
+                // Display Helpers
+                const fmt = (v, dec=2) => v ? v.toFixed(dec) : '0.00';
+                const colorClass = (v) => v >= 0 ? 'val-green' : 'val-red';
+                const elText = (id, txt) => {{
+                   const e = document.getElementById(id);
+                   if (e) e.innerText = txt;
+                }};
+                const elColor = (id, v) => {{
+                   const e = document.getElementById(id);
+                   if (e) {{
+                       e.classList.remove('val-green', 'val-red');
+                       e.classList.add(colorClass(v));
+                   }}
+                }};
+                
+                // SET VALUES
+                elText('disp_qty_order', fmt(data.custom.qty_order, S_DEC));
+                elText('disp_trade_count', data.custom.total_roundtrips || 0);
+                elText('disp_last_price', fmt(data.custom.current_price, P_DEC));
+                
+                elText('disp_total_profit', fmt(totalProfit));
+                elColor('disp_total_profit', totalProfit);
+                
+                elText('disp_invested', fmt(invested));
+                
+                elText('disp_matched_pnl', fmt(matchedPnl));
+                // elColor('disp_matched_pnl', matchedPnl); // Always green implied by design? or dynamic? layout says green. dynamic serves better.
+                
+                elText('disp_unmatched_pnl', fmt(unmatchedPnl));
+                elColor('disp_unmatched_pnl', unmatchedPnl);
+                
+                elText('disp_funding', fmt(fees));
+                elText('disp_trade_count', data.custom.total_roundtrips || 0);
+                
+                // Last Price
+                const lp = data.custom.current_price || 0;
+                elText('disp_last_price', lp.toFixed(P_DEC));
 
                 // --- 2. Render Order Book (Sidebar) ---
                 const book = data.custom.book;
@@ -800,21 +907,35 @@ pub fn render_dashboard(status: &StrategyStatus) -> String {
                 // --- 3. Render Trades (Sidebar & Bottom Panel) ---
                 const trades = data.custom.recent_trades || [];
                 
-                // Sidebar List (Simplified)
-                let sidebarHtml = '';
-                 if (trades.length === 0) {{
-                    sidebarHtml = '<tr><td colspan="3" style="text-align:center; padding: 20px;">No trades</td></tr>';
-                }} else {{
-                    for (const trade of trades) {{
-                         const sideColor = trade.side === 'Buy' ? 'var(--buy)' : 'var(--sell)';
-                         sidebarHtml += `<tr>
-                            <td style="text-align: left; color: ${{sideColor}}">${{trade.price.toFixed(P_DEC)}}</td>
-                            <td style="text-align: right">${{trade.size.toFixed(S_DEC)}}</td>
-                            <td style="text-align: right; color: var(--text-secondary)">${{new Date(trade.time * 1000).toLocaleTimeString([], {{hour:'2-digit', minute:'2-digit'}})}}</td>
-                        </tr>`;
+                // --- 3. Render Zone Stats (Sidebar) ---
+                if (data.custom.book) {{
+                    const book = data.custom.book;
+                    // Combine bids and asks to get full zone list
+                    const allZones = [...(book.asks || []), ...(book.bids || [])];
+                    allZones.sort((a,b) => a.level_idx - b.level_idx);
+                    
+                    let zoneHtml = '';
+                    if (allZones.length === 0) {{
+                        zoneHtml = '<div style="padding: 20px; text-align: center; color: var(--text-secondary)">No Zones</div>';
+                    }} else {{
+                        for (const zone of allZones) {{
+                             const pnlVal = zone.total_pnl || 0;
+                             const pnlColor = pnlVal >= 0 ? 'var(--buy)' : 'var(--sell)';
+                             const rt = zone.roundtrip_count || 0;
+                             
+                             // Use row class but override grid cols
+                             zoneHtml += `<div class="row" style="grid-template-columns: 60px 1fr 100px; padding-right: 24px;">
+                                <div class="col lvl-idx" style="padding-left: 8px;">${{zone.level_idx}}</div>
+                                <div class="col" style="text-align: center">${{rt}}</div>
+                                <div class="col" style="text-align: right; color: ${{pnlColor}}">${{pnlVal.toFixed(2)}}</div>
+                            </div>`;
+                        }}
                     }}
+                    const zoneContainer = document.getElementById('zoneStatsContainer');
+                    if (zoneContainer) zoneContainer.innerHTML = zoneHtml;
                 }}
-                document.getElementById('sidebarTrades').innerHTML = sidebarHtml;
+
+
 
                 // Main Bottom Table (Detailed)
                 let mainHtml = '';
@@ -897,10 +1018,11 @@ pub fn render_dashboard(status: &StrategyStatus) -> String {
         asset = status.asset,
         levels = grid_levels,
         range = range,
-        pnl_color = pnl_color,
-        pnl = status.net_profit(),
-        pos = status.position,
+        quote_asset = quote_asset,
+        base_asset = base_asset,
+        query_base_asset = base_asset, // Hack for {base_asset} re-use
         p_dec = p_dec,
-        s_dec = s_dec
+        s_dec = s_dec,
+        grid_type = grid_type
     )
 }

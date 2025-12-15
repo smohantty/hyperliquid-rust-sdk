@@ -39,6 +39,11 @@ struct GridZone {
     /// Tracks cost basis for PnL calculation.
     entry_price: f64,
 
+    /// Accumulated PnL for this specific zone
+    total_pnl: f64,
+    /// Number of completed roundtrips for this zone
+    roundtrip_count: u32,
+
     /// The Active Order ID for this zone
     order_id: Option<u64>,
 }
@@ -204,6 +209,8 @@ impl SpotGridStrategy {
                 size,
                 state: initial_state,
                 entry_price,
+                total_pnl: 0.0,
+                roundtrip_count: 0,
                 order_id: None,
             });
         }
@@ -320,14 +327,13 @@ impl Strategy for SpotGridStrategy {
                     );
 
                     // If we were WaitingBuy, we effectively "Covered a Short" OR "Accumulated".
-                    // The previous state was WaitingBuy. Usage of `entry_price`?
-                    // logic: entry_price stores the price of the Sell that put us in WaitingBuy.
-                    // If entry_price is > 0.0, we can calc short PnL.
-                    // If entry_price is 0.0 (initial state), no PnL.
-
                     if zone.entry_price > 0.0 {
                         let pnl = (zone.entry_price - fill.price) * fill.qty;
                         self.realized_pnl += pnl;
+
+                        // Increment Zone Stats
+                        zone.total_pnl += pnl;
+                        zone.roundtrip_count += 1;
 
                         let rt = RoundTrip {
                             entry_time: 0, // Not tracked
@@ -355,10 +361,13 @@ impl Strategy for SpotGridStrategy {
                     );
 
                     // If we were WaitingSell, we "Closed a Long".
-                    // `entry_price` stores the Buy Price.
                     if zone.entry_price > 0.0 {
                         let pnl = (fill.price - zone.entry_price) * fill.qty;
                         self.realized_pnl += pnl;
+
+                        // Increment Zone Stats
+                        zone.total_pnl += pnl;
+                        zone.roundtrip_count += 1;
 
                         let rt = RoundTrip {
                             entry_time: 0, // Not tracked
@@ -409,11 +418,40 @@ impl Strategy for SpotGridStrategy {
         let mut asks = Vec::new();
         let mut bids = Vec::new();
 
+        let mut unmatched_pnl = 0.0;
+        let mut invested_value = 0.0;
+        let mut active_grids = 0;
+
         for zone in &self.zones {
             let side = match zone.state {
                 ZoneState::WaitingBuy => OrderSide::Buy,
                 ZoneState::WaitingSell => OrderSide::Sell,
             };
+
+            // Calculate Stats
+            match zone.state {
+                ZoneState::WaitingSell => {
+                    // We hold inventory.
+                    // Unmatched PnL = (Current Price - Entry Price) * Size
+                    if self.last_price > 0.0 && zone.entry_price > 0.0 {
+                        unmatched_pnl += (self.last_price - zone.entry_price) * zone.size;
+                    }
+                    // Invested: Value of held token at entry
+                    if zone.entry_price > 0.0 {
+                        invested_value += zone.entry_price * zone.size;
+                    } else {
+                        // Fallback if entry not set (shouldn't happen for active holding)
+                        invested_value += zone.lower_price * zone.size;
+                    }
+                }
+                ZoneState::WaitingBuy => {
+                    // We have open Buy order. Invested = Capital reserved.
+                    invested_value += zone.lower_price * zone.size;
+                }
+            }
+            if zone.order_id.is_some() {
+                active_grids += 1;
+            }
 
             let price = match zone.state {
                 ZoneState::WaitingBuy => zone.lower_price,
@@ -427,12 +465,14 @@ impl Strategy for SpotGridStrategy {
             };
 
             let item = json!({
-                "level_idx": zone.index, // FIXED: Changed from zone_idx to level_idx
+                "level_idx": zone.index,
                 "price": price,
                 "size": zone.size,
                 "dist": dist,
                 "side": side,
-                "has_order": zone.order_id.is_some()
+                "has_order": zone.order_id.is_some(),
+                "total_pnl": zone.total_pnl,
+                "roundtrip_count": zone.roundtrip_count
             });
 
             match side {
@@ -458,6 +498,28 @@ impl Strategy for SpotGridStrategy {
         custom.insert("lower_price".to_string(), json!(self.lower_price));
         custom.insert("upper_price".to_string(), json!(self.upper_price));
         custom.insert("current_price".to_string(), json!(self.last_price));
+        custom.insert(
+            "grid_type".to_string(),
+            json!(match self.mode {
+                GridMode::Arithmetic => "Arithmetic",
+                GridMode::Geometric => "Geometric",
+            }),
+        );
+
+        custom.insert("unmatched_pnl".to_string(), json!(unmatched_pnl));
+        custom.insert("invested_value".to_string(), json!(invested_value));
+        custom.insert("active_grids".to_string(), json!(active_grids));
+        // Avg Qty (Take first zone as approx)
+        let qty_order = if !self.zones.is_empty() {
+            self.zones[0].size
+        } else {
+            0.0
+        };
+        custom.insert("qty_order".to_string(), json!(qty_order));
+        custom.insert(
+            "total_roundtrips".to_string(),
+            json!(self.completed_roundtrips.len()),
+        );
 
         custom.insert(
             "book".to_string(),
@@ -621,6 +683,8 @@ mod tests {
         assert_eq!(z0.upper_price, 110.0);
         assert_eq!(z0.state, ZoneState::WaitingBuy);
         assert_eq!(z0.entry_price, 0.0);
+        assert_eq!(z0.total_pnl, 0.0);
+        assert_eq!(z0.roundtrip_count, 0);
 
         // Zone 1: 110-120. Init Price 110.
         // 110 < 120 is True.
@@ -630,6 +694,8 @@ mod tests {
         assert_eq!(z1.upper_price, 120.0);
         assert_eq!(z1.state, ZoneState::WaitingSell);
         assert_eq!(z1.entry_price, 110.0);
+        assert_eq!(z1.total_pnl, 0.0);
+        assert_eq!(z1.roundtrip_count, 0);
 
         // Trigger Orders
         let orders = strategy.on_price_update("SOL-USDC", 110.0);
