@@ -118,7 +118,7 @@ pub fn render_dashboard(status: &StrategyStatus) -> String {
         /* --- Main Area (Chart + Sidebar) --- */
         .main-container {{
             display: grid;
-            grid-template-columns: 1fr 500px; /* Chart area, Side Panel */
+            grid-template-columns: 1fr 650px; /* Chart area, Side Panel (Widened) */
             overflow: hidden;
         }}
 
@@ -220,7 +220,7 @@ pub fn render_dashboard(status: &StrategyStatus) -> String {
         /* Reuse CLOB styles with tweaked colors */
         .clob-header {{
             display: grid;
-            grid-template-columns: 25px 1fr 1fr 1fr 1fr;
+            grid-template-columns: 25px 1fr 80px 1fr 1fr 40px 70px; /* Lvl Px Dist Sz Val RT PnL */
             padding: 8px 12px;
             font-size: 10px;
             color: var(--text-secondary);
@@ -233,7 +233,7 @@ pub fn render_dashboard(status: &StrategyStatus) -> String {
         }}
         .row {{
             display: grid;
-            grid-template-columns: 25px 1fr 1fr 1fr 1fr;
+            grid-template-columns: 25px 1fr 80px 1fr 1fr 40px 70px;
             padding: 3px 12px;
             font-size: 11px;
             font-family: 'JetBrains Mono', monospace;
@@ -248,7 +248,7 @@ pub fn render_dashboard(status: &StrategyStatus) -> String {
 
         .spread-row {{
             display: grid;
-            grid-template-columns: 25px 1fr 1fr 1fr 1fr;
+            grid-template-columns: 25px 1fr 80px 1fr 1fr 40px 70px;
             gap: 8px;
             padding: 6px;
             font-size: 11px;
@@ -386,13 +386,9 @@ pub fn render_dashboard(status: &StrategyStatus) -> String {
 
         <!-- Right Sidebar (CLOB) -->
         <div class="side-panel">
-            <div class="tabs">
-                <div class="tab active" onclick="switchTab('book')">Order Book</div>
-                <div class="tab" onclick="switchTab('recent')">GridZone</div>
-            </div>
 
             <!-- CLOB Tab -->
-            <div id="tab-book" class="tab-content active">
+            <div id="tab-book" class="tab-content active" style="display: flex;">
                  <div class="book-scroll-area">
                     <div class="clob-header">
                         <div class="col">Lvl</div>
@@ -400,6 +396,8 @@ pub fn render_dashboard(status: &StrategyStatus) -> String {
                         <div class="col">Dist%</div>
                         <div class="col">Size ({base_asset})</div>
                         <div class="col">Size ({quote_asset})</div>
+                        <div class="col" style="text-align: center">RTs</div>
+                        <div class="col" style="text-align: right">PnL</div>
                     </div>
                     <div id="bookContainer" class="book-container">
                          <div style="padding: 20px; text-align: center; color: var(--text-secondary)">Loading...</div>
@@ -407,19 +405,7 @@ pub fn render_dashboard(status: &StrategyStatus) -> String {
                  </div>
             </div>
 
-            <!-- Grid Zone Stats -->
-            <div id="tab-recent" class="tab-content">
-                 <div class="clob-header" style="grid-template-columns: 60px 1fr 100px; padding-right: 24px;">
-                    <div class="col" style="padding-left: 8px;">Lvl</div>
-                    <div class="col" style="text-align: center">RTs</div>
-                    <div class="col" style="text-align: right">PnL</div>
-                 </div>
-                 <div class="book-scroll-area">
-                     <div id="zoneStatsContainer" class="book-container">
-                         <div style="padding: 20px; text-align: center; color: var(--text-secondary)">Loading...</div>
-                     </div>
-                 </div>
-            </div>
+            
         </div>
     </div>
 
@@ -477,19 +463,7 @@ pub fn render_dashboard(status: &StrategyStatus) -> String {
         let lastCandleData = null; // Track the last candle for live updates
         let candleStartTime = null; // Track initial start time (1 day before bot start)
 
-        function switchTab(tabName) {{
-            // Sidebar tabs
-            document.querySelectorAll('.side-panel .tab').forEach(t => t.classList.remove('active'));
-            document.querySelectorAll('.side-panel .tab-content').forEach(c => c.classList.remove('active'));
-            
-            if (tabName === 'book') {{
-                document.querySelector('.side-panel .tab:nth-child(1)').classList.add('active');
-                document.getElementById('tab-book').classList.add('active');
-            }} else {{
-                document.querySelector('.side-panel .tab:nth-child(2)').classList.add('active');
-                document.getElementById('tab-recent').classList.add('active');
-            }}
-        }}
+
 
         async function updateDashboard() {{
             try {{
@@ -837,12 +811,18 @@ pub fn render_dashboard(status: &StrategyStatus) -> String {
                         const sizeDisplay = ask.has_order ? ask.size.toFixed(S_DEC) : '--';
                         const valDisplay = ask.has_order ? (ask.price * ask.size).toFixed(2) : '--';
                         const opacity = ask.has_order ? '1' : '0.3';
+                        const pnlVal = ask.total_pnl || 0;
+                        const pnlColor = pnlVal >= 0 ? 'var(--buy)' : 'var(--sell)';
+                        const rt = ask.roundtrip_count || 0;
+
                         html += `<div class="row" style="opacity: ${{opacity}}">
                             <div class="col lvl-idx">${{ask.level_idx}}</div>
                             <div class="col ask-price">${{ask.price.toFixed(P_DEC)}}</div>
                             <div class="col dist">${{ask.dist.toFixed(2)}}%</div>
                             <div class="col">${{sizeDisplay}}</div>
                             <div class="col">${{valDisplay}}</div>
+                            <div class="col" style="text-align: center">${{rt}}</div>
+                            <div class="col" style="text-align: right; color: ${{pnlColor}}">${{pnlVal.toFixed(2)}}</div>
                         </div>`;
                     }}
 
@@ -871,6 +851,8 @@ pub fn render_dashboard(status: &StrategyStatus) -> String {
                             ${{spreadHtml}}
                             <div class="col"></div>
                             <div class="col"></div>
+                            <div class="col"></div>
+                            <div class="col"></div>
                         </div>`;
                         
                         html += spreadRow;
@@ -883,12 +865,18 @@ pub fn render_dashboard(status: &StrategyStatus) -> String {
                         const sizeDisplay = bid.has_order ? bid.size.toFixed(S_DEC) : '--';
                         const valDisplay = bid.has_order ? (bid.price * bid.size).toFixed(2) : '--';
                         const opacity = bid.has_order ? '1' : '0.3';
+                        const pnlVal = bid.total_pnl || 0;
+                        const pnlColor = pnlVal >= 0 ? 'var(--buy)' : 'var(--sell)';
+                        const rt = bid.roundtrip_count || 0;
+
                         html += `<div class="row" style="opacity: ${{opacity}}">
                             <div class="col lvl-idx">${{bid.level_idx}}</div>
                             <div class="col bid-price">${{bid.price.toFixed(P_DEC)}}</div>
                             <div class="col dist">${{bid.dist.toFixed(2)}}%</div>
                             <div class="col">${{sizeDisplay}}</div>
                             <div class="col">${{valDisplay}}</div>
+                            <div class="col" style="text-align: center">${{rt}}</div>
+                            <div class="col" style="text-align: right; color: ${{pnlColor}}">${{pnlVal.toFixed(2)}}</div>
                         </div>`;
                     }}
                     
@@ -906,34 +894,6 @@ pub fn render_dashboard(status: &StrategyStatus) -> String {
                 
                 // --- 3. Render Trades (Sidebar & Bottom Panel) ---
                 const trades = data.custom.recent_trades || [];
-                
-                // --- 3. Render Zone Stats (Sidebar) ---
-                if (data.custom.book) {{
-                    const book = data.custom.book;
-                    // Combine bids and asks to get full zone list
-                    const allZones = [...(book.asks || []), ...(book.bids || [])];
-                    allZones.sort((a,b) => a.level_idx - b.level_idx);
-                    
-                    let zoneHtml = '';
-                    if (allZones.length === 0) {{
-                        zoneHtml = '<div style="padding: 20px; text-align: center; color: var(--text-secondary)">No Zones</div>';
-                    }} else {{
-                        for (const zone of allZones) {{
-                             const pnlVal = zone.total_pnl || 0;
-                             const pnlColor = pnlVal >= 0 ? 'var(--buy)' : 'var(--sell)';
-                             const rt = zone.roundtrip_count || 0;
-                             
-                             // Use row class but override grid cols
-                             zoneHtml += `<div class="row" style="grid-template-columns: 60px 1fr 100px; padding-right: 24px;">
-                                <div class="col lvl-idx" style="padding-left: 8px;">${{zone.level_idx}}</div>
-                                <div class="col" style="text-align: center">${{rt}}</div>
-                                <div class="col" style="text-align: right; color: ${{pnlColor}}">${{pnlVal.toFixed(2)}}</div>
-                            </div>`;
-                        }}
-                    }}
-                    const zoneContainer = document.getElementById('zoneStatsContainer');
-                    if (zoneContainer) zoneContainer.innerHTML = zoneHtml;
-                }}
 
 
 
