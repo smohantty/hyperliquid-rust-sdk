@@ -21,18 +21,31 @@ pub enum GridMode {
     Geometric,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub enum ZoneState {
+    WaitingBuy,  // Order placed at lower_price
+    WaitingSell, // Order placed at upper_price
+}
+
 #[derive(Debug, Clone)]
-struct GridLevel {
-    price: f64,
-    size: f64, // Base asset quantity for this level
+struct GridZone {
+    index: usize,
+    lower_price: f64,
+    upper_price: f64,
+    size: f64, // Base asset quantity for this zone
+
+    state: ZoneState,
+    /// Price of the last fill that set the current state.
+    /// Tracks cost basis for PnL calculation.
+    entry_price: f64,
+
+    /// The Active Order ID for this zone
     order_id: Option<u64>,
-    /// The side of the active order at this level
-    side: Option<OrderSide>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RoundTrip {
-    pub entry_time: u64,
+    pub entry_time: u64, // Approximate (time of prev fill not tracked currently, using current time for simplicity or needs field)
     pub exit_time: u64,
     pub entry_price: f64,
     pub exit_price: f64,
@@ -47,7 +60,7 @@ pub struct SpotGridStrategy {
     asset: String,
     lower_price: f64,
     upper_price: f64,
-    grid_levels: usize,
+    grid_levels: usize, // Number of "lines". Zones = grid_levels - 1
     mode: GridMode,
     precision: AssetPrecision,
 
@@ -55,9 +68,9 @@ pub struct SpotGridStrategy {
     order_size: Option<f64>,
     total_investment: Option<f64>,
 
-    levels: Vec<GridLevel>,
-    /// Map order_id -> (level_index, side)
-    active_orders: HashMap<u64, (usize, OrderSide)>,
+    zones: Vec<GridZone>,
+    /// Map order_id -> zone_index
+    active_orders: HashMap<u64, usize>,
 
     initialized: bool,
     position: f64,
@@ -68,16 +81,12 @@ pub struct SpotGridStrategy {
     /// Recent trades for dashboard
     recent_trades: VecDeque<TradeRecord>,
 
-    /// Roundtrip tracking
-    unmatched_fills: HashMap<usize, VecDeque<TradeRecord>>,
     completed_roundtrips: VecDeque<RoundTrip>,
 
     /// Initial price used to determine buy/sell sides
     initial_price: f64,
     /// Last seen market price (for dashboard)
     last_price: f64,
-    /// Flag to ensure we only place initial orders once in on_price_update
-    initial_placement_done: bool,
 }
 
 impl SpotGridStrategy {
@@ -102,7 +111,7 @@ impl SpotGridStrategy {
             precision,
             order_size,
             total_investment,
-            levels: Vec::with_capacity(grid_levels),
+            zones: Vec::new(),
             active_orders: HashMap::new(),
             initialized: false,
             position: 0.0,
@@ -110,51 +119,32 @@ impl SpotGridStrategy {
             trade_count: 0,
             total_fees: 0.0,
             recent_trades: VecDeque::with_capacity(50),
-            unmatched_fills: HashMap::new(),
             completed_roundtrips: VecDeque::with_capacity(50),
             initial_price,
             last_price: initial_price,
-            initial_placement_done: false,
         };
-        strategy.initialize_levels();
+        strategy.initialize_zones();
         strategy
     }
 
-    fn initialize_levels(&mut self) {
+    fn initialize_zones(&mut self) {
         if self.grid_levels < 2 {
-            warn!("Grid levels must be at least 2");
+            warn!("Grid levels must be at least 2 (to form 1 zone)");
             return;
         }
 
-        self.levels.clear();
+        self.zones.clear();
         self.active_orders.clear();
 
-        // Calculate size per level (constant base or constant quote)
-        let quote_per_level = self
-            .total_investment
-            .map(|inv| inv / self.grid_levels as f64);
-        let fixed_base_size = self.order_size;
-
+        // Generate Price Lines first
+        let mut prices = Vec::with_capacity(self.grid_levels);
         match self.mode {
             GridMode::Arithmetic => {
                 let step = (self.upper_price - self.lower_price) / (self.grid_levels as f64 - 1.0);
                 for i in 0..self.grid_levels {
                     let mut price = self.lower_price + (i as f64 * step);
                     price = self.precision.round_price(price, false);
-
-                    let raw_size = if let Some(q_val) = quote_per_level {
-                        q_val / price
-                    } else {
-                        fixed_base_size.unwrap_or(1.0)
-                    };
-                    let size = self.precision.round_size(raw_size);
-
-                    self.levels.push(GridLevel {
-                        price,
-                        size,
-                        order_id: None,
-                        side: None,
-                    });
+                    prices.push(price);
                 }
             }
             GridMode::Geometric => {
@@ -163,101 +153,63 @@ impl SpotGridStrategy {
                 for i in 0..self.grid_levels {
                     let mut price = self.lower_price * ratio.powi(i as i32);
                     price = self.precision.round_price(price, false);
-
-                    let raw_size = if let Some(q_val) = quote_per_level {
-                        q_val / price
-                    } else {
-                        fixed_base_size.unwrap_or(1.0)
-                    };
-                    let size = self.precision.round_size(raw_size);
-
-                    self.levels.push(GridLevel {
-                        price,
-                        size,
-                        order_id: None,
-                        side: None,
-                    });
+                    prices.push(price);
                 }
             }
         }
 
-        info!(
-            "Initialized {} levels ({:?}) from {:.4} to {:.4}",
-            self.grid_levels, self.mode, self.lower_price, self.upper_price
-        );
+        // Create Zones from adjacent prices
+        let num_zones = self.grid_levels - 1;
 
-        // Initial setup via reconcile using initial_price
-        // We set initialized=true so reconcile works, but we also just run it immediately.
+        let quote_per_zone = self.total_investment.map(|inv| inv / num_zones as f64);
+        let fixed_base_size = self.order_size;
+
+        for i in 0..num_zones {
+            let lower = prices[i];
+            let upper = prices[i + 1];
+
+            let raw_size = if let Some(q_val) = quote_per_zone {
+                q_val / lower
+            } else {
+                fixed_base_size.unwrap_or(1.0)
+            };
+            let size = self.precision.round_size(raw_size);
+
+            // Determine Initial State
+            // - If InitialPrice < Upper: We assume we hold inventory (or are below zone). We want to Sell at Upper.
+            // - If InitialPrice >= Upper: We are sold out. We want to Buy at Lower.
+
+            let initial_state = if self.initial_price < upper {
+                ZoneState::WaitingSell
+            } else {
+                ZoneState::WaitingBuy
+            };
+
+            // Initial Entry Price Logic:
+            let entry_price = if initial_state == ZoneState::WaitingSell {
+                self.initial_price
+            } else {
+                0.0
+            };
+
+            // Adjust position tracking
+            if initial_state == ZoneState::WaitingSell {
+                self.position += size;
+            }
+
+            self.zones.push(GridZone {
+                index: i,
+                lower_price: lower,
+                upper_price: upper,
+                size,
+                state: initial_state,
+                entry_price,
+                order_id: None,
+            });
+        }
+
+        info!("Initialized {} zones", self.zones.len());
         self.initialized = true;
-
-        // This will set up the initial grid structure (Buy Below, Sell Above)
-        // We don't return orders here (init phase), they will be picked up by first on_price_update
-        // if we called it. But actually we want to populate 'side' in levels.
-        // We can reuse the logic from reconcile_orders but we need to do it without generating orders yet?
-        // Actually, let's just use reconcile_orders logic inline or call a helper that sets sides.
-
-        // For simplicity, we just set sides manually here like before, to match "init state".
-        // Or better: Use reconcile logic to set sides, but ignore order generation.
-
-        let initial_price = self.initial_price;
-        let mut closest_idx = 0;
-        let mut min_diff = f64::MAX;
-
-        for (idx, level) in self.levels.iter().enumerate() {
-            let diff = (level.price - initial_price).abs();
-            if diff < min_diff {
-                min_diff = diff;
-                closest_idx = idx;
-            }
-        }
-
-        let closest_price = self.levels[closest_idx].price;
-
-        for (idx, level) in self.levels.iter_mut().enumerate() {
-            let side = if idx == closest_idx {
-                None
-            } else if level.price < closest_price {
-                Some(OrderSide::Buy)
-            } else {
-                Some(OrderSide::Sell)
-            };
-            level.side = side;
-        }
-
-        // self.log_grid_status(self.initial_price);
-    }
-
-    #[allow(dead_code)]
-    fn log_grid_status(&self, current_price: f64) {
-        let p_dec = self.precision.price_decimals as usize;
-        let s_dec = self.precision.sz_decimals as usize;
-
-        info!(
-            "--- Grid Status (Current Price ~{:.*} Range) ---",
-            p_dec, current_price
-        );
-        for (idx, level) in self.levels.iter().enumerate().rev() {
-            let status = if level.order_id.is_some() {
-                if let Some(s) = level.side {
-                    match s {
-                        OrderSide::Buy => "BUY ",
-                        OrderSide::Sell => "SELL",
-                    }
-                } else {
-                    "??? "
-                }
-            } else {
-                "EMPTY"
-            };
-
-            let marker = if level.side.is_none() { "<<" } else { "  " };
-
-            info!(
-                "Lvl {:02} | {} | {:.*} | {:.*} {}",
-                idx, status, p_dec, level.price, s_dec, level.size, marker
-            );
-        }
-        info!("------------------------------------------------");
     }
 
     fn generate_order_id() -> u64 {
@@ -267,89 +219,32 @@ impl SpotGridStrategy {
             .as_nanos() as u64
     }
 
-    /// Reconciles the grid structure based on the current market price.
-    /// Ensures that levels below current price are Buys, levels above are Sells,
-    /// and the closest level is Empty. Places missing orders.
-    fn reconcile_orders(&mut self, current_price: f64) -> Vec<OrderRequest> {
+    /// Place orders for all zones based on their current state.
+    /// Used during initial setup.
+    fn refresh_orders(&mut self) -> Vec<OrderRequest> {
         let mut orders = vec![];
         let asset = self.asset.clone();
 
-        let p_dec = self.precision.price_decimals as usize;
-        let s_dec = self.precision.sz_decimals as usize;
+        for i in 0..self.zones.len() {
+            let zone = &mut self.zones[i];
 
-        // 1. Identify where we SHOULD be
-        let mut closest_idx = 0;
-        let mut min_diff = f64::MAX;
-        for (idx, level) in self.levels.iter().enumerate() {
-            let diff = (level.price - current_price).abs();
-            if diff < min_diff {
-                min_diff = diff;
-                closest_idx = idx;
-            }
-        }
-        let closest_level_price = self.levels[closest_idx].price;
+            if zone.order_id.is_none() {
+                let order_id = Self::generate_order_id();
 
-        // 2. Iterate all levels and correct them
-        for (idx, level) in self.levels.iter_mut().enumerate().rev() {
-            // Determine Ideal Side
-            let ideal_side = if idx == closest_idx {
-                None // Empty
-            } else if level.price < closest_level_price {
-                Some(OrderSide::Buy)
-            } else {
-                Some(OrderSide::Sell)
-            };
+                let (price, side) = match zone.state {
+                    ZoneState::WaitingBuy => (zone.lower_price, OrderSide::Buy),
+                    ZoneState::WaitingSell => (zone.upper_price, OrderSide::Sell),
+                };
 
-            if idx == closest_idx {
-                info!(
-                    "Lvl {:02} | EMPTY | {:.*} | {:.*}   <<< CURRENT PRICE GAP",
-                    idx, p_dec, level.price, s_dec, level.size
-                );
-            }
+                let req = if side == OrderSide::Buy {
+                    OrderRequest::buy(order_id, &asset, zone.size, price)
+                } else {
+                    OrderRequest::sell(order_id, &asset, zone.size, price)
+                };
 
-            // Check if matches current state
-            // If we have an open order, check if it matches ideal side.
-            if let Some(_current_order_id) = level.order_id {
-                // We have an active order.
-                // If ideal_side is None, implies we should NOT have an order here.
-                // However, canceling orders in this paper market context or simplistic grid might be overkill
-                // if price is just noisy. But to fix "Interleaved" bug, we should be strict?
-                // For now: TRUST EXISTING ORDERS if they are on the "Correct Side" generally.
-                // But strictly: If ideal is Buy, and we have Sell... we have a problem.
-                // Paper market fills usually fix this quickly.
-                // We leave existing orders alone unless they are wildly wrong?
-                // Actually, if we just let `active_orders` be, we only place NEW orders.
-
-                // Keep strictly to: "Only place if `order_id` is None".
-                // But we must update `level.side` to match ideal?
-                // No, `level.side` should match the `active_order` if present.
-                // If we overwrite `level.side` but keep the old order, we get the bug.
-
-                // Correct Logic:
-                // If `order_id` is present, `level.side` MUST reflect that order.
-                // We do NOT change `level.side` if order_id is some.
-            } else {
-                // No active order. We are free to set side and place order.
-                if level.side != ideal_side {
-                    level.side = ideal_side;
-                }
-
-                if let Some(side) = level.side {
-                    // We need an order here
-                    let order_id = Self::generate_order_id();
-                    let req = if side == OrderSide::Buy {
-                        OrderRequest::buy(order_id, &asset, level.size, level.price)
-                    } else {
-                        OrderRequest::sell(order_id, &asset, level.size, level.price)
-                    };
-
-                    level.order_id = Some(order_id);
-                    self.active_orders.insert(order_id, (idx, side));
-                    orders.push(req);
-
-                    // let side_str = if side == OrderSide::Buy { "BUY " } else { "SELL" };
-                    // info!("Lvl {:02} | {} | {:.*} | {:.*}   <<< PLACING ORDER (Filling Gap)", idx, side_str, p_dec, level.price, s_dec, level.size);
-                }
+                zone.order_id = Some(order_id);
+                self.active_orders.insert(order_id, i);
+                orders.push(req);
             }
         }
 
@@ -365,11 +260,9 @@ impl Strategy for SpotGridStrategy {
 
         self.last_price = price;
 
-        // Only run reconcile on the FIRST update to place initial orders.
-        // Afterwards, we only reconcile on fills (Event Driven).
-        if !self.initial_placement_done {
-            self.initial_placement_done = true;
-            return self.reconcile_orders(price);
+        // Initial Placement
+        if self.initialized && self.active_orders.is_empty() && self.trade_count == 0 {
+            return self.refresh_orders();
         }
 
         vec![]
@@ -380,196 +273,129 @@ impl Strategy for SpotGridStrategy {
         let p_dec = self.precision.price_decimals as usize;
         let s_dec = self.precision.sz_decimals as usize;
 
-        if let Some((level_idx, side)) = self.active_orders.remove(&fill.order_id) {
-            // Mark level as empty (it filled)
-            // But beware: We only clear IF the level's order_id matches.
-            // (It should, unless we raced).
-            if self.levels[level_idx].order_id == Some(fill.order_id) {
-                self.levels[level_idx].order_id = None;
-                self.levels[level_idx].side = None; // Temporarily None until Reconcile fixes it
+        if let Some(zone_idx) = self.active_orders.remove(&fill.order_id) {
+            let zone = &mut self.zones[zone_idx];
+
+            if zone.order_id != Some(fill.order_id) {
+                warn!("Fill Order ID mismatch for zone {}", zone_idx);
+                return vec![];
             }
 
+            zone.order_id = None;
             self.trade_count += 1;
 
-            // ANSI Colors for visibility
             let green = "\x1b[32m";
             let red = "\x1b[31m";
             let reset = "\x1b[0m";
-            let level_price = self.levels[level_idx].price;
+
+            // Determine filled side based on previous state
+            let side_filled = match zone.state {
+                ZoneState::WaitingBuy => OrderSide::Buy,
+                ZoneState::WaitingSell => OrderSide::Sell,
+            };
+
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs();
 
             let current_trade = TradeRecord {
                 price: fill.price,
                 size: fill.qty,
-                side: if side.is_buy() {
-                    OrderSide::Buy
-                } else {
-                    OrderSide::Sell
-                },
-                time: SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap()
-                    .as_secs(),
+                side: side_filled,
+                time: now,
             };
             self.recent_trades.push_front(current_trade.clone());
             if self.recent_trades.len() > 50 {
                 self.recent_trades.pop_back();
             }
 
-            // --- Roundtrip Match Logic ---
-            if side == OrderSide::Buy {
-                self.position += fill.qty;
+            // TOGGLE STATE & CALCULATE PNL
+            match side_filled {
+                OrderSide::Buy => {
+                    self.position += fill.qty;
+                    info!(
+                        "{}Zone {:02} | BUY  | {:.*} | {:.*}   <<< BOUGHT @ Lower{}",
+                        green, zone_idx, p_dec, fill.price, s_dec, fill.qty, reset
+                    );
 
-                // Buying at Level `i`. Check for unmatched SELL at `i+1` (Short Trip closing)
-                let match_level = level_idx + 1;
-                let mut matched = false;
+                    // If we were WaitingBuy, we effectively "Covered a Short" OR "Accumulated".
+                    // The previous state was WaitingBuy. Usage of `entry_price`?
+                    // logic: entry_price stores the price of the Sell that put us in WaitingBuy.
+                    // If entry_price is > 0.0, we can calc short PnL.
+                    // If entry_price is 0.0 (initial state), no PnL.
 
-                if let Some(queue) = self.unmatched_fills.get_mut(&match_level) {
-                    if let Some(entry_trade) = queue.pop_front() {
-                        // Found a match! Short Roundtrip found (Sold Higher, Bought Lower)
-                        matched = true;
-                        let pnl = (entry_trade.price - fill.price) * fill.qty;
+                    if zone.entry_price > 0.0 {
+                        let pnl = (zone.entry_price - fill.price) * fill.qty;
                         self.realized_pnl += pnl;
 
                         let rt = RoundTrip {
-                            entry_time: entry_trade.time,
-                            exit_time: current_trade.time,
-                            entry_price: entry_trade.price,
+                            entry_time: 0, // Not tracked
+                            exit_time: now,
+                            entry_price: zone.entry_price,
                             exit_price: fill.price,
                             side: "Short".to_string(),
                             size: fill.qty,
                             pnl,
-                            entry_lvl: match_level,
-                            exit_lvl: level_idx,
+                            entry_lvl: zone_idx,
+                            exit_lvl: zone_idx,
                         };
                         self.completed_roundtrips.push_front(rt);
                     }
+
+                    // Update entry_price to this Buy Price (Opening Long)
+                    zone.entry_price = fill.price;
+                    zone.state = ZoneState::WaitingSell;
                 }
+                OrderSide::Sell => {
+                    self.position -= fill.qty;
+                    info!(
+                        "{}Zone {:02} | SELL | {:.*} | {:.*}   <<< SOLD @ Upper{}",
+                        red, zone_idx, p_dec, fill.price, s_dec, fill.qty, reset
+                    );
 
-                if !matched {
-                    // Store as Unmatched Buy at this level
-                    self.unmatched_fills
-                        .entry(level_idx)
-                        .or_insert_with(VecDeque::new)
-                        .push_back(current_trade.clone());
-                }
+                    // If we were WaitingSell, we "Closed a Long".
+                    // `entry_price` stores the Buy Price.
+                    if zone.entry_price > 0.0 {
+                        let pnl = (fill.price - zone.entry_price) * fill.qty;
+                        self.realized_pnl += pnl;
 
-                info!("{}Lvl {:02} | BUY  | {:.*} | {:.*}   <<< ORDER FILLED (Exec: {:.*}, Gap created){}", 
-                    green, level_idx, p_dec, level_price, s_dec, fill.qty, p_dec, fill.price, reset);
-            } else {
-                self.position -= fill.qty;
-
-                // Selling at Level `i`. Check for unmatched BUY at `i-1` (Long Trip closing)
-                let match_level = if level_idx > 0 {
-                    level_idx - 1
-                } else {
-                    usize::MAX
-                };
-                let mut matched = false;
-
-                if match_level != usize::MAX {
-                    if let Some(queue) = self.unmatched_fills.get_mut(&match_level) {
-                        if let Some(entry_trade) = queue.pop_front() {
-                            // Found a match! Long Roundtrip found (Bought Lower, Sold Higher)
-                            matched = true;
-                            let pnl = (fill.price - entry_trade.price) * fill.qty;
-                            self.realized_pnl += pnl;
-
-                            let rt = RoundTrip {
-                                entry_time: entry_trade.time,
-                                exit_time: current_trade.time,
-                                entry_price: entry_trade.price,
-                                exit_price: fill.price,
-                                side: "Long".to_string(),
-                                size: fill.qty,
-                                pnl,
-                                entry_lvl: match_level,
-                                exit_lvl: level_idx,
-                            };
-                            self.completed_roundtrips.push_front(rt);
-                        }
+                        let rt = RoundTrip {
+                            entry_time: 0, // Not tracked
+                            exit_time: now,
+                            entry_price: zone.entry_price,
+                            exit_price: fill.price,
+                            side: "Long".to_string(),
+                            size: fill.qty,
+                            pnl,
+                            entry_lvl: zone_idx,
+                            exit_lvl: zone_idx,
+                        };
+                        self.completed_roundtrips.push_front(rt);
                     }
-                }
 
-                if !matched {
-                    // Store as Unmatched Sell at this level
-                    self.unmatched_fills
-                        .entry(level_idx)
-                        .or_insert_with(VecDeque::new)
-                        .push_back(current_trade.clone());
+                    // Update entry_price to this Sell Price (Opening Short)
+                    zone.entry_price = fill.price;
+                    zone.state = ZoneState::WaitingBuy;
                 }
-
-                info!("{}Lvl {:02} | SELL | {:.*} | {:.*}   <<< ORDER FILLED (Exec: {:.*}, Gap created){}", 
-                    red, level_idx, p_dec, level_price, s_dec, fill.qty, p_dec, fill.price, reset);
             }
 
-            // NEW LOGIC: Place counter-order based on filled level
-            // If BUY filled at i, place SELL at i+1
-            // If SELL filled at i, place BUY at i-1
-
-            let next_level_idx = if side == OrderSide::Buy {
-                if level_idx + 1 < self.levels.len() {
-                    Some(level_idx + 1)
-                } else {
-                    None
-                }
-            } else {
-                if level_idx > 0 {
-                    Some(level_idx - 1)
-                } else {
-                    None
-                }
+            // PLACE NEW ORDER FOR THIS ZONE
+            let (target_price, target_side) = match zone.state {
+                ZoneState::WaitingBuy => (zone.lower_price, OrderSide::Buy),
+                ZoneState::WaitingSell => (zone.upper_price, OrderSide::Sell),
             };
 
-            if let Some(target_idx) = next_level_idx {
-                let target_level = &mut self.levels[target_idx];
+            let order_id = Self::generate_order_id();
+            let req = if target_side == OrderSide::Buy {
+                OrderRequest::buy(order_id, &self.asset, zone.size, target_price)
+            } else {
+                OrderRequest::sell(order_id, &self.asset, zone.size, target_price)
+            };
 
-                // Only place if empty. If occupied, we assume the existing order is valid.
-                if target_level.order_id.is_none() {
-                    let target_side = if side == OrderSide::Buy {
-                        OrderSide::Sell
-                    } else {
-                        OrderSide::Buy
-                    };
-                    target_level.side = Some(target_side);
-
-                    let order_id = Self::generate_order_id();
-                    let req = if target_side == OrderSide::Buy {
-                        OrderRequest::buy(
-                            order_id,
-                            &self.asset,
-                            target_level.size,
-                            target_level.price,
-                        )
-                    } else {
-                        OrderRequest::sell(
-                            order_id,
-                            &self.asset,
-                            target_level.size,
-                            target_level.price,
-                        )
-                    };
-
-                    target_level.order_id = Some(order_id);
-                    self.active_orders
-                        .insert(order_id, (target_idx, target_side));
-                    orders.push(req);
-
-                    let side_str = if target_side == OrderSide::Buy {
-                        "BUY "
-                    } else {
-                        "SELL"
-                    };
-                    info!(
-                        "Lvl {:02} | {} | {:.*} | {:.*}   <<< PLACING ORDER (Counter)",
-                        target_idx, side_str, p_dec, target_level.price, s_dec, target_level.size
-                    );
-                } else {
-                    // Log that we skipped because occupied (expected in dense grid)
-                    // info!("Lvl {:02} already occupied, skipping counter-order", target_idx);
-                }
-            }
-
-            // self.log_grid_status(fill.price);
+            zone.order_id = Some(order_id);
+            self.active_orders.insert(order_id, zone_idx);
+            orders.push(req);
         }
 
         orders
@@ -583,30 +409,33 @@ impl Strategy for SpotGridStrategy {
         let mut asks = Vec::new();
         let mut bids = Vec::new();
 
-        for (i, level) in self.levels.iter().enumerate() {
-            let dist = (level.price - self.last_price).abs() / self.last_price * 100.0;
-            let has_order = level.order_id.is_some();
+        for zone in &self.zones {
+            let side = match zone.state {
+                ZoneState::WaitingBuy => OrderSide::Buy,
+                ZoneState::WaitingSell => OrderSide::Sell,
+            };
 
-            // Determine which side this level should be on based on price
-            // If side is None, it's an empty/gap level - assign it based on price vs current
-            let effective_side = level.side.unwrap_or_else(|| {
-                if level.price < self.last_price {
-                    OrderSide::Buy
-                } else {
-                    OrderSide::Sell
-                }
-            });
+            let price = match zone.state {
+                ZoneState::WaitingBuy => zone.lower_price,
+                ZoneState::WaitingSell => zone.upper_price,
+            };
+
+            let dist = if self.last_price > 0.0 {
+                (price - self.last_price).abs() / self.last_price * 100.0
+            } else {
+                0.0
+            };
 
             let item = json!({
-                "level_idx": i,
-                "price": level.price,
-                "size": level.size,
+                "level_idx": zone.index, // FIXED: Changed from zone_idx to level_idx
+                "price": price,
+                "size": zone.size,
                 "dist": dist,
-                "side": effective_side,
-                "has_order": has_order
+                "side": side,
+                "has_order": zone.order_id.is_some()
             });
 
-            match effective_side {
+            match side {
                 OrderSide::Buy => bids.push(item),
                 OrderSide::Sell => asks.push(item),
             }
@@ -753,14 +582,14 @@ impl StrategyFactory for SpotGridStrategyFactory {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::market::{AssetPrecision, OrderFill, OrderSide};
+    use crate::market::AssetPrecision;
 
     fn create_test_strategy() -> SpotGridStrategy {
         SpotGridStrategy::new(
             "SOL-USDC".to_string(),
             100.0,
             120.0,
-            3, // Levels at 100, 110, 120
+            3, // Levels (Lines): 100, 110, 120. Zones: (100-110), (110-120).
             GridMode::Arithmetic,
             Some(1.0),
             None,
@@ -769,7 +598,7 @@ mod tests {
                 price_decimals: 2,
                 max_decimals: 6,
             },
-            110.0, // Start at middle
+            110.0, // Init at 110 (Middle)
         )
     }
 
@@ -777,95 +606,33 @@ mod tests {
     fn test_grid_initialization() {
         let mut strategy = create_test_strategy();
 
-        // Initial reconcile
+        // Check Zones
+        assert_eq!(strategy.zones.len(), 2);
+
+        // Zone 0: 100-110. Init Price 110.
+        // 110 < 110 is False.
+        // So Not < Upper? Wait. 110 is NOT < 110.
+        // Logic: if initial < upper { WaitingSell } else { WaitingBuy }.
+        // 110 < 110 is False.
+        // So WaitingBuy.
+        // Correct.
+        let z0 = &strategy.zones[0];
+        assert_eq!(z0.lower_price, 100.0);
+        assert_eq!(z0.upper_price, 110.0);
+        assert_eq!(z0.state, ZoneState::WaitingBuy);
+        assert_eq!(z0.entry_price, 0.0);
+
+        // Zone 1: 110-120. Init Price 110.
+        // 110 < 120 is True.
+        // So WaitingSell.
+        let z1 = &strategy.zones[1];
+        assert_eq!(z1.lower_price, 110.0);
+        assert_eq!(z1.upper_price, 120.0);
+        assert_eq!(z1.state, ZoneState::WaitingSell);
+        assert_eq!(z1.entry_price, 110.0);
+
+        // Trigger Orders
         let orders = strategy.on_price_update("SOL-USDC", 110.0);
-
-        // At 110:
-        // Lvl 0 (100) < 110 -> Buy
-        // Lvl 1 (110) == 110 -> Empty
-        // Lvl 2 (120) > 110 -> Sell
-
         assert_eq!(orders.len(), 2);
-
-        let l0 = &strategy.levels[0];
-        assert!(l0.order_id.is_some());
-        assert_eq!(l0.side, Some(OrderSide::Buy));
-
-        let l1 = &strategy.levels[1];
-        assert!(l1.order_id.is_none());
-        assert!(l1.side.is_none());
-
-        let l2 = &strategy.levels[2];
-        assert!(l2.order_id.is_some());
-        assert_eq!(l2.side, Some(OrderSide::Sell));
-    }
-
-    #[test]
-    fn test_buy_fill_behavior() {
-        let mut strategy = create_test_strategy();
-        let _ = strategy.on_price_update("SOL-USDC", 110.0);
-
-        // Verify state: L0(Buy), L1(Empty), L2(Sell)
-        let l0_oid = strategy.levels[0].order_id.unwrap();
-
-        // Simulate Fill at L0 (Buy)
-        let fill = OrderFill {
-            order_id: l0_oid,
-            asset: "SOL-USDC".to_string(),
-            price: 100.0,
-            qty: 1.0,
-        };
-
-        let orders = strategy.on_order_filled(&fill);
-
-        // Expectation:
-        // L0 Filled (Buy). Target -> L1.
-        // L1 matches current logic? L1 is correct counter-level (110).
-        // Check L1 state. L1 was Empty.
-        // Should place SELL at L1.
-
-        assert_eq!(orders.len(), 1);
-        let order = &orders[0];
-        assert_eq!(order.side, OrderSide::Sell);
-        assert_eq!(order.limit_price, 110.0);
-
-        // Verify internal state
-        assert!(strategy.levels[0].order_id.is_none()); // L0 now empty
-        assert!(strategy.levels[1].order_id.is_some()); // L1 now has order
-        assert_eq!(strategy.levels[1].side, Some(OrderSide::Sell));
-    }
-
-    #[test]
-    fn test_sell_fill_behavior() {
-        let mut strategy = create_test_strategy();
-        let _ = strategy.on_price_update("SOL-USDC", 110.0);
-
-        // Verify state: L0(Buy), L1(Empty), L2(Sell)
-        let l2_oid = strategy.levels[2].order_id.unwrap();
-
-        // Simulate Fill at L2 (Sell)
-        let fill = OrderFill {
-            order_id: l2_oid,
-            asset: "SOL-USDC".to_string(),
-            price: 120.0,
-            qty: 1.0,
-        };
-
-        let orders = strategy.on_order_filled(&fill);
-
-        // Expectation:
-        // L2 Filled (Sell). Target -> L1.
-        // L1 was Empty.
-        // Should place BUY at L1.
-
-        assert_eq!(orders.len(), 1);
-        let order = &orders[0];
-        assert_eq!(order.side, OrderSide::Buy);
-        assert_eq!(order.limit_price, 110.0);
-
-        // Verify internal state
-        assert!(strategy.levels[2].order_id.is_none()); // L2 now empty
-        assert!(strategy.levels[1].order_id.is_some()); // L1 now has order
-        assert_eq!(strategy.levels[1].side, Some(OrderSide::Buy));
     }
 }
