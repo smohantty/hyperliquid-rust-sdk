@@ -326,30 +326,11 @@ impl Strategy for SpotGridStrategy {
                         green, zone_idx, p_dec, fill.price, s_dec, fill.qty, reset
                     );
 
-                    // If we were WaitingBuy, we effectively "Covered a Short" OR "Accumulated".
-                    if zone.entry_price > 0.0 {
-                        let pnl = (zone.entry_price - fill.price) * fill.qty;
-                        self.realized_pnl += pnl;
+                    // For Spot Grid, a Buy is opening/refilling inventory.
+                    // We simply set the entry_price for the subsequent Sell.
+                    // We do NOT count Sell->Buy as a profit cycle (Short PnL) in this mode.
 
-                        // Increment Zone Stats
-                        zone.total_pnl += pnl;
-                        zone.roundtrip_count += 1;
-
-                        let rt = RoundTrip {
-                            entry_time: 0, // Not tracked
-                            exit_time: now,
-                            entry_price: zone.entry_price,
-                            exit_price: fill.price,
-                            side: "Short".to_string(),
-                            size: fill.qty,
-                            pnl,
-                            entry_lvl: zone_idx,
-                            exit_lvl: zone_idx,
-                        };
-                        self.completed_roundtrips.push_front(rt);
-                    }
-
-                    // Update entry_price to this Buy Price (Opening Long)
+                    // Update entry_price to this Buy Price (Cost Basis)
                     zone.entry_price = fill.price;
                     zone.state = ZoneState::WaitingSell;
                 }
