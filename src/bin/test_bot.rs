@@ -17,7 +17,7 @@ use log::info;
 use tokio::sync::RwLock;
 
 use hyperliquid_rust_sdk::{
-    bot::{render_default_dashboard, Bot},
+    bot::Bot,
     market::{OrderFill, OrderRequest, PaperTradingMarket, PaperTradingMarketInput},
     strategy::{Strategy, StrategyStatus},
 };
@@ -43,7 +43,7 @@ impl TestStrategy {
             realized_pnl: 0.0,
             trade_count: 0,
             next_order_id: 0,
-            buy_threshold: 0.0,  // Will be set on first price
+            buy_threshold: 0.0, // Will be set on first price
             sell_threshold: 0.0,
         }
     }
@@ -59,7 +59,7 @@ impl Strategy for TestStrategy {
 
         // Set thresholds on first price
         if self.buy_threshold == 0.0 {
-            self.buy_threshold = price * 0.99;  // Buy 1% below
+            self.buy_threshold = price * 0.99; // Buy 1% below
             self.sell_threshold = price * 1.01; // Sell 1% above
             info!(
                 "Strategy initialized: buy below {:.4}, sell above {:.4}",
@@ -76,7 +76,12 @@ impl Strategy for TestStrategy {
             info!("Strategy: placing BUY order at {:.4}", price);
         } else if self.position > 0.0 && price >= self.sell_threshold {
             self.next_order_id += 1;
-            orders.push(OrderRequest::sell(self.next_order_id, asset, self.position, price));
+            orders.push(OrderRequest::sell(
+                self.next_order_id,
+                asset,
+                self.position,
+                price,
+            ));
             info!("Strategy: placing SELL order at {:.4}", price);
         }
 
@@ -170,11 +175,8 @@ async fn main() {
 }
 
 // HTTP Handlers - simple because bot is already shared
-async fn dashboard_handler(
-    State(bot): State<Arc<RwLock<Bot<TestStrategy>>>>,
-) -> Html<String> {
-    let status = bot.read().await.status();
-    Html(render_default_dashboard(&status))
+async fn dashboard_handler(State(bot): State<Arc<RwLock<Bot<TestStrategy>>>>) -> Html<String> {
+    Html(bot.read().await.render_dashboard())
 }
 
 async fn status_handler(
