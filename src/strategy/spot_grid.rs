@@ -364,8 +364,8 @@ impl Strategy for SpotGridStrategy {
                         self.completed_roundtrips.push_front(rt);
                     }
 
-                    // Update entry_price to this Sell Price (Opening Short)
-                    zone.entry_price = fill.price;
+                    // Reset entry_price to 0.0 as we have sold the position (Spot logic)
+                    zone.entry_price = 0.0;
                     zone.state = ZoneState::WaitingBuy;
                 }
             }
